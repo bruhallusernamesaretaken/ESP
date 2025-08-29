@@ -1,5 +1,14 @@
--- WA Universal ESP (Improved) + Radar (with names)
--- Adds a small radar UI with blips showing upright name + distance labels inside the radar circle.
+-- WA Universal ESP (Improved)
+-- Notes: preserves existing Fluent UI usage and settings keys.
+-- Improvements:
+--  * persistent connectors for 3D boxes (no per-frame create/remove)
+--  * centralized show/hide helpers (less repeated code)
+--  * optional visibility raycast (Settings.VisibilityCheck)
+--  * fixed some Drawing creation bugs and property usage
+--  * performance: fewer allocations per-frame, viewport size cached
+--  * robust skeleton bone detection and on-screen checks
+--  * proper rainbow application and fewer race conditions
+--  * safer cleanup / unload
 
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
@@ -10,7 +19,6 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
-local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 -- containers
 local Drawings = {
@@ -76,13 +84,7 @@ local Settings = {
     SkeletonColor = Color3.fromRGB(255, 255, 255),
     SkeletonThickness = 1.5,
     SkeletonTransparency = 1,
-    HealthTextFormat = "Number", -- Number/Percentage/Both
-
-    -- Radar-specific
-    RadarEnabled = false,
-    RadarRange = 300,     -- studs
-    RadarSize = 180,      -- pixels (diameter)
-    RadarShowNames = true -- new toggle for showing names on radar
+    HealthTextFormat = "Number" -- Number/Percentage/Both
 }
 
 -- small helper: safe Drawing.new
@@ -403,188 +405,6 @@ local function GetBones(character)
     if not (bones.Head and bones.UpperTorso and bones.RootPart) then return nil end
     return bones
 end
-
--- === Radar UI Creation ===
-local radarGui, radarFrame, radarBlipContainer
-do
-    -- create ScreenGui (only once)
-    radarGui = Instance.new("ScreenGui")
-    radarGui.Name = "WA_ESP_Radar"
-    radarGui.ResetOnSpawn = false
-    radarGui.Parent = PlayerGui
-
-    radarFrame = Instance.new("Frame")
-    radarFrame.Name = "Circle"
-    radarFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-    radarFrame.BackgroundTransparency = 0.25
-    radarFrame.BorderSizePixel = 0
-    radarFrame.Size = UDim2.fromOffset(Settings.RadarSize, Settings.RadarSize)
-    radarFrame.Position = UDim2.new(0, 16, 1, - (Settings.RadarSize + 16)) -- bottom-left offset
-    radarFrame.AnchorPoint = Vector2.new(0, 0)
-    radarFrame.Parent = radarGui
-
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(1, 0)
-    corner.Parent = radarFrame
-
-    local inner = Instance.new("Frame")
-    inner.Name = "Inner"
-    inner.Size = UDim2.fromScale(1, 1)
-    inner.BackgroundTransparency = 1
-    inner.Parent = radarFrame
-
-    radarBlipContainer = Instance.new("Folder")
-    radarBlipContainer.Name = "Blips"
-    radarBlipContainer.Parent = radarFrame
-end
-
--- Helper: create a blip UI (frame + upright distance label + name) for a player
-local function CreateBlipFor(player)
-    if not radarBlipContainer then return end
-    if radarBlipContainer:FindFirstChild(player.Name) then return radarBlipContainer[player.Name] end
-
-    local blip = Instance.new("Frame")
-    blip.Name = player.Name
-    blip.Size = UDim2.fromOffset(8, 8)
-    blip.AnchorPoint = Vector2.new(0.5, 0.5)
-    blip.BackgroundColor3 = Colors.Enemy
-    blip.BorderSizePixel = 0
-    blip.Parent = radarBlipContainer
-
-    local uic = Instance.new("UICorner")
-    uic.CornerRadius = UDim.new(1,0)
-    uic.Parent = blip
-
-    -- Name label (above distance)
-    local nameLabel = Instance.new("TextLabel")
-    nameLabel.Name = "NameLabel"
-    nameLabel.Size = UDim2.fromOffset(64, 16)
-    nameLabel.AnchorPoint = Vector2.new(0.5, 1) -- bottom center of the label attached to blip
-    nameLabel.Position = UDim2.new(0.5, 0, 0, -20) -- above distance label
-    nameLabel.BackgroundTransparency = 1
-    nameLabel.TextColor3 = Color3.new(1,1,1)
-    nameLabel.TextScaled = true
-    nameLabel.Font = Enum.Font.GothamSemibold
-    nameLabel.Text = ""
-    nameLabel.TextYAlignment = Enum.TextYAlignment.Bottom
-    nameLabel.Parent = blip
-
-    -- Distance label (just above the blip)
-    local label = Instance.new("TextLabel")
-    label.Name = "DistanceLabel"
-    label.Size = UDim2.fromOffset(48, 14)
-    label.AnchorPoint = Vector2.new(0.5, 1) -- bottom center anchored to the blip
-    label.Position = UDim2.new(0.5, 0, 0, -6) -- sits just above the blip (below nameLabel)
-    label.BackgroundTransparency = 1
-    label.TextColor3 = Color3.new(1,1,1)
-    label.TextScaled = true
-    label.Font = Enum.Font.Gotham
-    label.Text = ""
-    label.Parent = blip
-
-    return blip
-end
-
--- Update radar each frame (clamp blips inside circle, labels upright)
-local function UpdateRadar()
-    if not Settings.RadarEnabled then
-        if radarFrame and radarFrame.Parent then radarFrame.Visible = false end
-        return
-    end
-    if not radarFrame or not radarBlipContainer then return end
-    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-        radarFrame.Visible = false
-        return
-    end
-
-    radarFrame.Visible = true
-    -- update size if changed by settings
-    local sizePx = math.max(32, Settings.RadarSize)
-    if radarFrame.Size.X.Offset ~= sizePx or radarFrame.Size.Y.Offset ~= sizePx then
-        radarFrame.Size = UDim2.fromOffset(sizePx, sizePx)
-        radarFrame.Position = UDim2.new(0, 16, 1, - (sizePx + 16))
-    end
-
-    local radarRadius = radarFrame.AbsoluteSize.X / 2
-    local center = Vector2.new(radarRadius, radarRadius)
-    local localHRP = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not localHRP then return end
-
-    -- mark seen players to later remove stale blips
-    local seen = {}
-
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-            local targetHRP = player.Character.HumanoidRootPart
-            local offset = targetHRP.Position - localHRP.Position
-            local distance = offset.Magnitude
-
-            if distance <= Settings.RadarRange then
-                local angle = math.atan2(offset.X, offset.Z) -- angle relative to forward
-                local scaled = (distance / Settings.RadarRange) * radarRadius
-                -- clamp to inside circle (leave margin for label)
-                local margin = 18
-                scaled = math.clamp(scaled, 0, radarRadius - margin)
-
-                local localX = center.X + math.sin(angle) * scaled
-                local localY = center.Y - math.cos(angle) * scaled
-
-                local blip = radarBlipContainer:FindFirstChild(player.Name) or CreateBlipFor(player)
-                if blip then
-                    blip.Position = UDim2.fromOffset(localX - blip.Size.X.Offset/2, localY - blip.Size.Y.Offset/2)
-                    blip.BackgroundColor3 = (player.Team == LocalPlayer.Team and Colors.Ally) or Colors.Enemy
-                    blip.Visible = true
-
-                    local nameLabel = blip:FindFirstChild("NameLabel")
-                    local label = blip:FindFirstChild("DistanceLabel")
-
-                    -- set name text using NameMode (DisplayName/Name)
-                    if Settings.RadarShowNames and nameLabel then
-                        local nm = (Settings.NameMode == "DisplayName" and player.DisplayName) or player.Name
-                        nameLabel.Text = nm
-                        nameLabel.Visible = true
-                        nameLabel.TextColor3 = GetPlayerColor(player, "Text") or Colors.Neutral
-                    elseif nameLabel then
-                        nameLabel.Visible = false
-                    end
-
-                    if label then
-                        label.Text = tostring(math.floor(distance + 0.5)) .. "m"
-                        label.Visible = true
-                        label.TextColor3 = Colors.Distance
-                    end
-
-                    -- ensure label/blip stays inside circle (if too close to edge, push toward center)
-                    local distFromCenter = (Vector2.new(localX, localY) - center).Magnitude
-                    if distFromCenter > (radarRadius - margin) then
-                        local push = (distFromCenter - (radarRadius - margin))
-                        local moveDir = (center - Vector2.new(localX, localY)).Unit
-                        local newLocal = Vector2.new(localX, localY) + moveDir * push
-                        blip.Position = UDim2.fromOffset(newLocal.X - blip.Size.X.Offset/2, newLocal.Y - blip.Size.Y.Offset/2)
-                    end
-                end
-                seen[player.Name] = true
-            else
-                -- hide if out of radar range
-                local old = radarBlipContainer:FindFirstChild(player.Name)
-                if old then old.Visible = false end
-            end
-        else
-            -- hide if no character
-            local old = radarBlipContainer:FindFirstChild(player.Name)
-            if old then old.Visible = false end
-        end
-    end
-
-    -- cleanup stale blips (players who left or not seen)
-    for _, child in ipairs(radarBlipContainer:GetChildren()) do
-        if not seen[child.Name] then
-            child.Visible = false
-        end
-    end
-end
-
--- === End Radar UI ===
 
 -- Main update function for a single player
 local function UpdateESP(player)
@@ -927,7 +747,7 @@ local function UpdateESP(player)
         if esp.Info.Name then esp.Info.Name.Visible = false end
     end
 
-    -- Distance text (existing on-screen box distance)
+    -- Distance text
     if Settings.ShowDistance and esp.Info.Distance then
         local distTxt = tostring(math.floor(distance)) .. " " .. (Settings.DistanceUnit or "studs")
         esp.Info.Distance.Text = distTxt
@@ -1038,7 +858,6 @@ local function DisableESP()
     for player, sk in pairs(Drawings.Skeleton) do
         for _, l in pairs(sk) do if l then l.Visible = false end end
     end
-    if radarFrame then radarFrame.Visible = false end
 end
 
 -- Full cleanup
@@ -1048,10 +867,6 @@ local function CleanupESP()
     end
     Drawings = { ESP = {}, Skeleton = {} }
     Highlights = {}
-    -- destroy radar UI
-    if radarGui and radarGui.Parent then
-        pcall(function() radarGui:Destroy() end)
-    end
 end
 
 -- Build UI (keeps your original Fluent layout and hooks)
@@ -1221,49 +1036,6 @@ do
     })
     HealthStyleDropdown:OnChanged(function(Value)
         Settings.HealthStyle = Value
-    end)
-
-    -- Radar section in ESP tab
-    local RadarSection = Tabs.ESP:AddSection("Radar")
-    local RadarToggle = RadarSection:AddToggle("RadarEnabled", {
-        Title = "Enable Radar",
-        Default = false
-    })
-    RadarToggle:OnChanged(function()
-        Settings.RadarEnabled = RadarToggle.Value
-        radarFrame.Visible = Settings.RadarEnabled
-    end)
-
-    local RadarRangeSlider = RadarSection:AddSlider("RadarRange", {
-        Title = "Radar Range (studs)",
-        Default = Settings.RadarRange,
-        Min = 50,
-        Max = 2000,
-        Rounding = 0
-    })
-    RadarRangeSlider:OnChanged(function(Value)
-        Settings.RadarRange = Value
-    end)
-
-    local RadarSizeSlider = RadarSection:AddSlider("RadarSize", {
-        Title = "Radar Size (px)",
-        Default = Settings.RadarSize,
-        Min = 64,
-        Max = 400,
-        Rounding = 0
-    })
-    RadarSizeSlider:OnChanged(function(Value)
-        Settings.RadarSize = Value
-        radarFrame.Size = UDim2.fromOffset(Value, Value)
-        radarFrame.Position = UDim2.new(0, 16, 1, - (Value + 16))
-    end)
-
-    local RadarNameToggle = RadarSection:AddToggle("RadarShowNames", {
-        Title = "Show Names",
-        Default = true
-    })
-    RadarNameToggle:OnChanged(function()
-        Settings.RadarShowNames = RadarNameToggle.Value
     end)
 end
 
@@ -1476,9 +1248,6 @@ local function RenderLoop()
             end
         end
     end
-
-    -- update Radar (UI)
-    UpdateRadar()
 end
 
 -- main connection
@@ -1496,10 +1265,6 @@ Players.PlayerAdded:Connect(function(p)
 end)
 Players.PlayerRemoving:Connect(function(p)
     RemoveESP(p)
-    -- also remove blip
-    if radarBlipContainer and radarBlipContainer:FindFirstChild(p.Name) then
-        pcall(function() radarBlipContainer[p.Name]:Destroy() end)
-    end
 end)
 
 -- initial create

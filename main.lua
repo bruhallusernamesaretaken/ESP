@@ -1,6 +1,5 @@
---[[ how esp works:
-    (original comment left intact)
---]]
+-- Full improved WA Universal ESP (robust / defensive version)
+-- Paste as a single script (LocalScript) where you run your ESP.
 
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
@@ -12,14 +11,40 @@ local UserInputService = game:GetService("UserInputService")
 local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
+-- safe helpers
+local function safeCall(fn, ...)
+    local ok, res = pcall(fn, ...)
+    return ok, res
+end
+
+local function safeSet(obj, key, val)
+    if not obj then return end
+    pcall(function() obj[key] = val end)
+end
+
+local function safeRemove(obj)
+    if not obj then return end
+    pcall(function()
+        -- Drawing objects often expose :Remove as function; Instances use Destroy
+        if typeof(obj) == "Instance" and obj.Destroy then
+            obj:Destroy()
+        elseif type(obj.Remove) == "function" then
+            obj:Remove()
+        elseif type(obj.remove) == "function" then
+            obj:remove()
+        end
+    end)
+end
+
+local function newDrawing(kind)
+    local ok, obj = pcall(function() return Drawing.new(kind) end)
+    if ok and obj then return obj end
+    return nil
+end
+
+-- central data
 local Drawings = {
-    ESP = {},
-    Tracers = {},
-    Boxes = {},
-    Healthbars = {},
-    Names = {},
-    Distances = {},
-    Snaplines = {},
+    ESP = {},       -- player => {Box = {...}, Tracer = ..., HealthBar = {...}, Info = {...}, Snapline = ...}
     Skeleton = {}
 }
 
@@ -30,7 +55,7 @@ local Colors = {
     Selected = Color3.fromRGB(255, 210, 0),
     Health = Color3.fromRGB(0, 255, 0),
     Distance = Color3.fromRGB(200, 200, 200),
-    Rainbow = nil
+    Rainbow = Color3.fromRGB(255,255,255)
 }
 
 local Highlights = {}
@@ -79,87 +104,95 @@ local Settings = {
     SkeletonESP = false,
     SkeletonColor = Color3.fromRGB(255, 255, 255),
     SkeletonThickness = 1.5,
-    SkeletonTransparency = 1
+    SkeletonTransparency = 1,
+    HealthTextFormat = "Number" -- default added
 }
 
+-- Create drawing objects for a player
 local function CreateESP(player)
-    if player == LocalPlayer then return end
+    if not player or player == LocalPlayer then return end
+    if Drawings.ESP[player] then return end
 
     local box = {
-        -- corner horizontals
-        TopLeft = Drawing.new("Line"),
-        TopRight = Drawing.new("Line"),
-        BottomLeft = Drawing.new("Line"),
-        BottomRight = Drawing.new("Line"),
-        -- side verticals/edges (used for Full box & corner verticals)
-        Left = Drawing.new("Line"),
-        Right = Drawing.new("Line"),
-        Top = Drawing.new("Line"),
-        Bottom = Drawing.new("Line"),
-        -- persistent connector lines for 3D mode (4 lines connecting front/back)
+        TopLeft = newDrawing("Line"),
+        TopRight = newDrawing("Line"),
+        BottomLeft = newDrawing("Line"),
+        BottomRight = newDrawing("Line"),
+        Left = newDrawing("Line"),
+        Right = newDrawing("Line"),
+        Top = newDrawing("Line"),
+        Bottom = newDrawing("Line"),
         Connectors = {}
     }
 
-    -- create 4 cached connector lines (persistent rather than ephemeral)
     for i = 1, 4 do
-        local conn = Drawing.new("Line")
-        conn.Visible = false
-        conn.Color = Colors.Enemy
-        conn.Thickness = Settings.BoxThickness
-        box.Connectors[i] = conn
-    end
-
-    -- Set safe properties on the line drawings (don't attempt .Filled on Line objects)
-    for key, line in pairs(box) do
-        if key ~= "Connectors" then
-            line.Visible = false
-            line.Color = Colors.Enemy
-            line.Thickness = Settings.BoxThickness
+        local conn = newDrawing("Line")
+        if conn then
+            conn.Visible = false
+            conn.Color = Colors.Enemy
+            conn.Thickness = Settings.BoxThickness
+            box.Connectors[i] = conn
         end
     end
 
-    local tracer = Drawing.new("Line")
-    tracer.Visible = false
-    tracer.Color = Colors.Enemy
-    tracer.Thickness = Settings.TracerThickness
+    for key, line in pairs(box) do
+        if key ~= "Connectors" and line then
+            pcall(function()
+                line.Visible = false
+                line.Color = Colors.Enemy
+                line.Thickness = Settings.BoxThickness
+            end)
+        end
+    end
+
+    local tracer = newDrawing("Line")
+    if tracer then
+        tracer.Visible = false
+        tracer.Color = Colors.Enemy
+        tracer.Thickness = Settings.TracerThickness
+    end
 
     local healthBar = {
-        Outline = Drawing.new("Square"),
-        Fill = Drawing.new("Square"),
-        Text = Drawing.new("Text")
+        Outline = newDrawing("Square"),
+        Fill = newDrawing("Square"),
+        Text = newDrawing("Text")
     }
-
-    for _, obj in pairs(healthBar) do
-        obj.Visible = false
-        if obj == healthBar.Fill then
-            obj.Color = Colors.Health
-            obj.Filled = true
-        elseif obj == healthBar.Text then
-            obj.Center = true
-            obj.Size = Settings.TextSize
-            obj.Color = Colors.Health
-            obj.Font = Settings.TextFont
-        end
+    if healthBar.Outline then healthBar.Outline.Visible = false end
+    if healthBar.Fill then
+        healthBar.Fill.Visible = false
+        pcall(function() healthBar.Fill.Filled = true end)
+        healthBar.Fill.Color = Colors.Health
+    end
+    if healthBar.Text then
+        healthBar.Text.Visible = false
+        healthBar.Text.Center = true
+        healthBar.Text.Size = Settings.TextSize
+        healthBar.Text.Color = Colors.Health
+        healthBar.Text.Font = Settings.TextFont
+        healthBar.Text.Outline = true
     end
 
     local info = {
-        Name = Drawing.new("Text"),
-        Distance = Drawing.new("Text")
+        Name = newDrawing("Text"),
+        Distance = newDrawing("Text")
     }
-
     for _, text in pairs(info) do
-        text.Visible = false
-        text.Center = true
-        text.Size = Settings.TextSize
-        text.Color = Colors.Enemy
-        text.Font = Settings.TextFont
-        text.Outline = true
+        if text then
+            text.Visible = false
+            text.Center = true
+            text.Size = Settings.TextSize
+            text.Color = Colors.Enemy
+            text.Font = Settings.TextFont
+            text.Outline = true
+        end
     end
 
-    local snapline = Drawing.new("Line")
-    snapline.Visible = false
-    snapline.Color = Colors.Enemy
-    snapline.Thickness = 1
+    local snapline = newDrawing("Line")
+    if snapline then
+        snapline.Visible = false
+        snapline.Color = Colors.Enemy
+        snapline.Thickness = 1
+    end
 
     local highlight = Instance.new("Highlight")
     highlight.FillColor = Settings.ChamsFillColor
@@ -168,48 +201,25 @@ local function CreateESP(player)
     highlight.OutlineTransparency = Settings.ChamsOutlineTransparency
     highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
     highlight.Enabled = Settings.ChamsEnabled
-
     Highlights[player] = highlight
 
-    local skeleton = {
-        -- Spine & Head
-        Head = Drawing.new("Line"),
-        Neck = Drawing.new("Line"),
-        UpperSpine = Drawing.new("Line"),
-        LowerSpine = Drawing.new("Line"),
-
-        -- Left Arm
-        LeftShoulder = Drawing.new("Line"),
-        LeftUpperArm = Drawing.new("Line"),
-        LeftLowerArm = Drawing.new("Line"),
-        LeftHand = Drawing.new("Line"),
-
-        -- Right Arm
-        RightShoulder = Drawing.new("Line"),
-        RightUpperArm = Drawing.new("Line"),
-        RightLowerArm = Drawing.new("Line"),
-        RightHand = Drawing.new("Line"),
-
-        -- Left Leg
-        LeftHip = Drawing.new("Line"),
-        LeftUpperLeg = Drawing.new("Line"),
-        LeftLowerLeg = Drawing.new("Line"),
-        LeftFoot = Drawing.new("Line"),
-
-        -- Right Leg
-        RightHip = Drawing.new("Line"),
-        RightUpperLeg = Drawing.new("Line"),
-        RightLowerLeg = Drawing.new("Line"),
-        RightFoot = Drawing.new("Line")
+    local skeleton = {}
+    local skeletonNames = {
+        "Head", "Neck", "UpperSpine", "LowerSpine",
+        "LeftShoulder","LeftUpperArm","LeftLowerArm","LeftHand",
+        "RightShoulder","RightUpperArm","RightLowerArm","RightHand",
+        "LeftHip","LeftUpperLeg","LeftLowerLeg","LeftFoot",
+        "RightHip","RightUpperLeg","RightLowerLeg","RightFoot"
     }
-
-    for _, line in pairs(skeleton) do
-        line.Visible = false
-        line.Color = Settings.SkeletonColor
-        line.Thickness = Settings.SkeletonThickness
-        line.Transparency = Settings.SkeletonTransparency
+    for _, name in ipairs(skeletonNames) do
+        skeleton[name] = newDrawing("Line")
+        if skeleton[name] then
+            skeleton[name].Visible = false
+            skeleton[name].Color = Settings.SkeletonColor
+            skeleton[name].Thickness = Settings.SkeletonThickness
+            skeleton[name].Transparency = Settings.SkeletonTransparency
+        end
     end
-
     Drawings.Skeleton[player] = skeleton
 
     Drawings.ESP[player] = {
@@ -222,47 +232,53 @@ local function CreateESP(player)
 end
 
 local function RemoveESP(player)
+    if not player then return end
     local esp = Drawings.ESP[player]
     if esp then
-        -- remove box lines including connectors
-        for key, obj in pairs(esp.Box) do
-            if key == "Connectors" then
-                for _, c in ipairs(obj) do
-                    if c and c.Remove then pcall(c.Remove, c) end
+        if esp.Box then
+            for key, obj in pairs(esp.Box) do
+                if key == "Connectors" and type(obj) == "table" then
+                    for _, c in ipairs(obj) do safeRemove(c) end
+                else
+                    safeRemove(obj)
                 end
-            else
-                if obj and obj.Remove then pcall(obj.Remove, obj) end
             end
         end
-
-        if esp.Tracer and esp.Tracer.Remove then pcall(esp.Tracer.Remove, esp.Tracer) end
-
-        for _, obj in pairs(esp.HealthBar) do
-            if obj and obj.Remove then pcall(obj.Remove, obj) end
-        end
-
-        for _, obj in pairs(esp.Info) do
-            if obj and obj.Remove then pcall(obj.Remove, obj) end
-        end
-
-        if esp.Snapline and esp.Snapline.Remove then pcall(esp.Snapline.Remove, esp.Snapline) end
-
+        safeRemove(esp.Tracer)
+        if esp.HealthBar then for _, o in pairs(esp.HealthBar) do safeRemove(o) end end
+        if esp.Info then for _, o in pairs(esp.Info) do safeRemove(o) end end
+        safeRemove(esp.Snapline)
         Drawings.ESP[player] = nil
     end
 
-    local highlight = Highlights[player]
-    if highlight then
-        highlight:Destroy()
+    local hl = Highlights[player]
+    if hl then
+        pcall(function() hl:Destroy() end)
         Highlights[player] = nil
     end
 
-    local skeleton = Drawings.Skeleton[player]
-    if skeleton then
-        for _, line in pairs(skeleton) do
-            if line and line.Remove then pcall(line.Remove, line) end
-        end
+    local sk = Drawings.Skeleton[player]
+    if sk then
+        for _, l in pairs(sk) do safeRemove(l) end
         Drawings.Skeleton[player] = nil
     end
+end
+
+local function HideAllDrawingsForESP(esp)
+    if not esp then return end
+    if esp.Box then
+        for key, obj in pairs(esp.Box) do
+            if key == "Connectors" and type(obj) == "table" then
+                for _, c in ipairs(obj) do pcall(function() c.Visible = false end) end
+            else
+                pcall(function() if obj then obj.Visible = false end end)
+            end
+        end
+    end
+    pcall(function() if esp.Tracer then esp.Tracer.Visible = false end end)
+    if esp.HealthBar then for _, o in pairs(esp.HealthBar) do pcall(function() if o then o.Visible = false end end) end end
+    if esp.Info then for _, o in pairs(esp.Info) do pcall(function() if o then o.Visible = false end end) end end
+    pcall(function() if esp.Snapline then esp.Snapline.Visible = false end end)
 end
 
 local function GetPlayerColor(player)
@@ -271,26 +287,7 @@ local function GetPlayerColor(player)
         if Settings.RainbowTracers and Settings.TracerESP then return Colors.Rainbow end
         if Settings.RainbowText and (Settings.NameESP or Settings.HealthESP) then return Colors.Rainbow end
     end
-    return player.Team == LocalPlayer.Team and Colors.Ally or Colors.Enemy
-end
-
-local function GetBoxCorners(cf, size)
-    local corners = {
-        Vector3.new(-size.X/2, -size.Y/2, -size.Z/2),
-        Vector3.new(-size.X/2, -size.Y/2, size.Z/2),
-        Vector3.new(-size.X/2, size.Y/2, -size.Z/2),
-        Vector3.new(-size.X/2, size.Y/2, size.Z/2),
-        Vector3.new(size.X/2, -size.Y/2, -size.Z/2),
-        Vector3.new(size.X/2, -size.Y/2, size.Z/2),
-        Vector3.new(size.X/2, size.Y/2, -size.Z/2),
-        Vector3.new(size.X/2, size.Y/2, size.Z/2)
-    }
-
-    for i, corner in ipairs(corners) do
-        corners[i] = cf:PointToWorldSpace(corner)
-    end
-
-    return corners
+    return (player.Team == LocalPlayer.Team) and Colors.Ally or Colors.Enemy
 end
 
 local function GetTracerOrigin()
@@ -306,137 +303,47 @@ local function GetTracerOrigin()
     end
 end
 
+-- Main per-player update
 local function UpdateESP(player)
     if not Settings.Enabled then return end
+    if not player or player == LocalPlayer then return end
 
     local esp = Drawings.ESP[player]
     if not esp then return end
 
     local character = player.Character
-    if not character then 
-        -- Hide all drawings if character doesn't exist
-        for _, obj in pairs(esp.Box) do
-            if type(obj) == "table" then
-                for _, c in ipairs(obj) do c.Visible = false end
-            else
-                obj.Visible = false
-            end
-        end
-        esp.Tracer.Visible = false
-        for _, obj in pairs(esp.HealthBar) do obj.Visible = false end
-        for _, obj in pairs(esp.Info) do obj.Visible = false end
-        esp.Snapline.Visible = false
-
+    if not character then
+        HideAllDrawingsForESP(esp)
         local skeleton = Drawings.Skeleton[player]
-        if skeleton then
-            for _, line in pairs(skeleton) do
-                line.Visible = false
-            end
-        end
-        return 
+        if skeleton then for _, l in pairs(skeleton) do pcall(function() l.Visible = false end) end end
+        return
     end
 
     local rootPart = character:FindFirstChild("HumanoidRootPart")
-    if not rootPart then 
-        -- Hide all drawings if rootPart doesn't exist
-        for _, obj in pairs(esp.Box) do
-            if type(obj) == "table" then
-                for _, c in ipairs(obj) do c.Visible = false end
-            else
-                obj.Visible = false
-            end
-        end
-        esp.Tracer.Visible = false
-        for _, obj in pairs(esp.HealthBar) do obj.Visible = false end
-        for _, obj in pairs(esp.Info) do obj.Visible = false end
-        esp.Snapline.Visible = false
-
+    if not rootPart then
+        HideAllDrawingsForESP(esp)
         local skeleton = Drawings.Skeleton[player]
-        if skeleton then
-            for _, line in pairs(skeleton) do
-                line.Visible = false
-            end
-        end
-        return 
-    end
-
-    -- Early screen check to hide all drawings if player is off screen
-    local _, isOnScreen = Camera:WorldToViewportPoint(rootPart.Position)
-    if not isOnScreen then
-        for _, obj in pairs(esp.Box) do
-            if type(obj) == "table" then
-                for _, c in ipairs(obj) do c.Visible = false end
-            else
-                obj.Visible = false
-            end
-        end
-        esp.Tracer.Visible = false
-        for _, obj in pairs(esp.HealthBar) do obj.Visible = false end
-        for _, obj in pairs(esp.Info) do obj.Visible = false end
-        esp.Snapline.Visible = false
-
-        local skeleton = Drawings.Skeleton[player]
-        if skeleton then
-            for _, line in pairs(skeleton) do
-                line.Visible = false
-            end
-        end
+        if skeleton then for _, l in pairs(skeleton) do pcall(function() l.Visible = false end) end end
         return
     end
 
     local humanoid = character:FindFirstChild("Humanoid")
     if not humanoid or humanoid.Health <= 0 then
-        for _, obj in pairs(esp.Box) do
-            if type(obj) == "table" then
-                for _, c in ipairs(obj) do c.Visible = false end
-            else
-                obj.Visible = false
-            end
-        end
-        esp.Tracer.Visible = false
-        for _, obj in pairs(esp.HealthBar) do obj.Visible = false end
-        for _, obj in pairs(esp.Info) do obj.Visible = false end
-        esp.Snapline.Visible = false
-
+        HideAllDrawingsForESP(esp)
         local skeleton = Drawings.Skeleton[player]
-        if skeleton then
-            for _, line in pairs(skeleton) do
-                line.Visible = false
-            end
-        end
+        if skeleton then for _, l in pairs(skeleton) do pcall(function() l.Visible = false end) end end
         return
     end
 
-    local pos, onScreen = Camera:WorldToViewportPoint(rootPart.Position)
+    local worldPoint, onScreen = Camera:WorldToViewportPoint(rootPart.Position)
     local distance = (rootPart.Position - Camera.CFrame.Position).Magnitude
-
     if not onScreen or distance > Settings.MaxDistance then
-        for _, obj in pairs(esp.Box) do
-            if type(obj) == "table" then
-                for _, c in ipairs(obj) do c.Visible = false end
-            else
-                obj.Visible = false
-            end
-        end
-        esp.Tracer.Visible = false
-        for _, obj in pairs(esp.HealthBar) do obj.Visible = false end
-        for _, obj in pairs(esp.Info) do obj.Visible = false end
-        esp.Snapline.Visible = false
+        HideAllDrawingsForESP(esp)
         return
     end
 
     if Settings.TeamCheck and player.Team == LocalPlayer.Team and not Settings.ShowTeam then
-        for _, obj in pairs(esp.Box) do
-            if type(obj) == "table" then
-                for _, c in ipairs(obj) do c.Visible = false end
-            else
-                obj.Visible = false
-            end
-        end
-        esp.Tracer.Visible = false
-        for _, obj in pairs(esp.HealthBar) do obj.Visible = false end
-        for _, obj in pairs(esp.Info) do obj.Visible = false end
-        esp.Snapline.Visible = false
+        HideAllDrawingsForESP(esp)
         return
     end
 
@@ -444,208 +351,175 @@ local function UpdateESP(player)
     local size = character:GetExtentsSize()
     local cf = rootPart.CFrame
 
-    -- explicit parentheses to get the transformed CFrame position and better centering
-    local topVec3, top_onscreen = Camera:WorldToViewportPoint((cf * CFrame.new(0, size.Y/2, 0)).Position)
-    local bottomVec3, bottom_onscreen = Camera:WorldToViewportPoint((cf * CFrame.new(0, -size.Y/2, 0)).Position)
+    local topV3, topOn = Camera:WorldToViewportPoint((cf * CFrame.new(0, size.Y/2, 0)).Position)
+    local bottomV3, bottomOn = Camera:WorldToViewportPoint((cf * CFrame.new(0, -size.Y/2, 0)).Position)
+    if not topOn or not bottomOn then HideAllDrawingsForESP(esp) return end
 
-    if not top_onscreen or not bottom_onscreen then
-        for _, obj in pairs(esp.Box) do
-            if type(obj) == "table" then
-                for _, c in ipairs(obj) do c.Visible = false end
-            else
-                obj.Visible = false
-            end
-        end
-        return
-    end
-
-    -- screenSize guarded to avoid zero or negative values
-    local screenSize = math.max(2, bottomVec3.Y - topVec3.Y)
+    local screenSize = math.max(2, bottomV3.Y - topV3.Y)
     local boxWidth = math.max(10, screenSize * 0.65)
-
-    -- use a centered X calculated from top and bottom to be stable across rotations
-    local centerX = (topVec3.X + bottomVec3.X) / 2
-    local boxPosition = Vector2.new(centerX - boxWidth/2, topVec3.Y)
+    local centerX = (topV3.X + bottomV3.X) / 2
+    local boxPosition = Vector2.new(centerX - boxWidth/2, topV3.Y)
     local boxSize = Vector2.new(boxWidth, screenSize)
 
-    -- Hide all box parts by default
+    -- default hide box parts
     for key, obj in pairs(esp.Box) do
         if key == "Connectors" then
-            for _, c in ipairs(obj) do c.Visible = false end
+            for _, c in ipairs(obj) do pcall(function() c.Visible = false end) end
         else
-            obj.Visible = false
+            pcall(function() if obj then obj.Visible = false end end)
         end
     end
 
+    -- BOX DRAWING
     if Settings.BoxESP then
         if Settings.BoxStyle == "ThreeD" then
-            local front = {
-                TL = Camera:WorldToViewportPoint((cf * CFrame.new(-size.X/2, size.Y/2, -size.Z/2)).Position),
-                TR = Camera:WorldToViewportPoint((cf * CFrame.new(size.X/2, size.Y/2, -size.Z/2)).Position),
-                BL = Camera:WorldToViewportPoint((cf * CFrame.new(-size.X/2, -size.Y/2, -size.Z/2)).Position),
-                BR = Camera:WorldToViewportPoint((cf * CFrame.new(size.X/2, -size.Y/2, -size.Z/2)).Position)
-            }
+            local function vp(p) return Camera:WorldToViewportPoint(p) end
+            local fTL = vp((cf * CFrame.new(-size.X/2, size.Y/2, -size.Z/2)).Position)
+            local fTR = vp((cf * CFrame.new(size.X/2, size.Y/2, -size.Z/2)).Position)
+            local fBL = vp((cf * CFrame.new(-size.X/2, -size.Y/2, -size.Z/2)).Position)
+            local fBR = vp((cf * CFrame.new(size.X/2, -size.Y/2, -size.Z/2)).Position)
 
-            local back = {
-                TL = Camera:WorldToViewportPoint((cf * CFrame.new(-size.X/2, size.Y/2, size.Z/2)).Position),
-                TR = Camera:WorldToViewportPoint((cf * CFrame.new(size.X/2, size.Y/2, size.Z/2)).Position),
-                BL = Camera:WorldToViewportPoint((cf * CFrame.new(-size.X/2, -size.Y/2, size.Z/2)).Position),
-                BR = Camera:WorldToViewportPoint((cf * CFrame.new(size.X/2, -size.Y/2, size.Z/2)).Position)
-            }
+            local bTL = vp((cf * CFrame.new(-size.X/2, size.Y/2, size.Z/2)).Position)
+            local bTR = vp((cf * CFrame.new(size.X/2, size.Y/2, size.Z/2)).Position)
+            local bBL = vp((cf * CFrame.new(-size.X/2, -size.Y/2, size.Z/2)).Position)
+            local bBR = vp((cf * CFrame.new(size.X/2, -size.Y/2, size.Z/2)).Position)
 
-            -- ensure all points are in front of camera (Z > 0)
-            if not (front.TL.Z > 0 and front.TR.Z > 0 and front.BL.Z > 0 and front.BR.Z > 0 and
-                   back.TL.Z > 0 and back.TR.Z > 0 and back.BL.Z > 0 and back.BR.Z > 0) then
-                -- off-screen; hide connectors just in case
-                for _, c in ipairs(esp.Box.Connectors) do c.Visible = false end
-                for key, obj in pairs(esp.Box) do
-                    if key ~= "Connectors" then obj.Visible = false end
+            if not (fTL.Z > 0 and fTR.Z > 0 and fBL.Z > 0 and fBR.Z > 0 and bTL.Z > 0 and bTR.Z > 0 and bBL.Z > 0 and bBR.Z > 0) then
+                for _, c in ipairs(esp.Box.Connectors) do pcall(function() c.Visible = false end) end
+            else
+                local function v2(v3) return Vector2.new(v3.X, v3.Y) end
+                local ftl, ftr, fbl, fbr = v2(fTL), v2(fTR), v2(fBL), v2(fBR)
+                local btl, btr, bbl, bbr = v2(bTL), v2(bTR), v2(bBL), v2(bBR)
+
+                pcall(function()
+                    if esp.Box.Top then esp.Box.Top.From, esp.Box.Top.To, esp.Box.Top.Visible = ftl, ftr, true end
+                    if esp.Box.Bottom then esp.Box.Bottom.From, esp.Box.Bottom.To, esp.Box.Bottom.Visible = fbl, fbr, true end
+                    if esp.Box.Left then esp.Box.Left.From, esp.Box.Left.To, esp.Box.Left.Visible = ftl, fbl, true end
+                    if esp.Box.Right then esp.Box.Right.From, esp.Box.Right.To, esp.Box.Right.Visible = ftr, fbr, true end
+                end)
+
+                pcall(function()
+                    if esp.Box.TopLeft then esp.Box.TopLeft.From, esp.Box.TopLeft.To, esp.Box.TopLeft.Visible = btl, btr, true end
+                    if esp.Box.BottomLeft then esp.Box.BottomLeft.From, esp.Box.BottomLeft.To, esp.Box.BottomLeft.Visible = bbl, bbr, true end
+                end)
+
+                local connectors = esp.Box.Connectors
+                if connectors then
+                    local con = { {ftl,btl}, {ftr,btr}, {fbl,bbl}, {fbr,bbr} }
+                    for i = 1, 4 do
+                        local c = connectors[i]
+                        if c and con[i] then
+                            pcall(function()
+                                c.From = con[i][1]
+                                c.To = con[i][2]
+                                c.Visible = true
+                                c.Color = color
+                                c.Thickness = Settings.BoxThickness
+                            end)
+                        end
+                    end
                 end
-                return
-            end
 
-            -- Convert to Vector2
-            local function toVector2(v3) return Vector2.new(v3.X, v3.Y) end
-            local fTL, fTR, fBL, fBR = toVector2(front.TL), toVector2(front.TR), toVector2(front.BL), toVector2(front.BR)
-            local bTL, bTR, bBL, bBR = toVector2(back.TL), toVector2(back.TR), toVector2(back.BL), toVector2(back.BR)
-
-            -- Front face (draw as full rectangle using Top/Bottom/Left/Right lines)
-            -- We'll map the stored lines so corner visuals stay tidy for 3D as well:
-            esp.Box.Top.From = fTL
-            esp.Box.Top.To = fTR
-            esp.Box.Top.Visible = true
-
-            esp.Box.Bottom.From = fBL
-            esp.Box.Bottom.To = fBR
-            esp.Box.Bottom.Visible = true
-
-            esp.Box.Left.From = fTL
-            esp.Box.Left.To = fBL
-            esp.Box.Left.Visible = true
-
-            esp.Box.Right.From = fTR
-            esp.Box.Right.To = fBR
-            esp.Box.Right.Visible = true
-
-            -- Back face (smaller/shifted rectangle)
-            -- Use leftover corner lines to hint back face
-            esp.Box.TopLeft.From = bTL
-            esp.Box.TopLeft.To = bTR
-            esp.Box.TopLeft.Visible = true
-
-            esp.Box.BottomLeft.From = bBL
-            esp.Box.BottomLeft.To = bBR
-            esp.Box.BottomLeft.Visible = true
-
-            -- Connect front to back using persistent connectors
-            local connectors = esp.Box.Connectors
-            connectors[1].From = fTL; connectors[1].To = bTL; connectors[1].Visible = true
-            connectors[2].From = fTR; connectors[2].To = bTR; connectors[2].Visible = true
-            connectors[3].From = fBL; connectors[3].To = bBL; connectors[3].Visible = true
-            connectors[4].From = fBR; connectors[4].To = bBR; connectors[4].Visible = true
-
-            -- color/thickness for these now
-            for _, line in ipairs({esp.Box.Top, esp.Box.Bottom, esp.Box.Left, esp.Box.Right, esp.Box.TopLeft, esp.Box.BottomLeft}) do
-                if line then
-                    line.Color = color
-                    line.Thickness = Settings.BoxThickness
+                for _, lineKey in ipairs({"Top","Bottom","Left","Right","TopLeft","BottomLeft"}) do
+                    local l = esp.Box[lineKey]
+                    if l then
+                        pcall(function()
+                            l.Color = color
+                            l.Thickness = Settings.BoxThickness
+                        end)
+                    end
                 end
-            end
-            for _, c in ipairs(connectors) do
-                c.Color = color
-                c.Thickness = Settings.BoxThickness
             end
 
         elseif Settings.BoxStyle == "Corner" then
-            local cornerSize = math.clamp(boxWidth * 0.18, 6, boxWidth * 0.45) -- stable corner sizing
+            local cornerSize = math.clamp(boxWidth * 0.18, 6, boxWidth * 0.45)
 
-            -- top-left corner: horizontal then vertical
             local tl_h_from = boxPosition
             local tl_h_to = boxPosition + Vector2.new(cornerSize, 0)
             local tl_v_from = boxPosition
             local tl_v_to = boxPosition + Vector2.new(0, cornerSize)
 
-            esp.Box.TopLeft.From = tl_h_from; esp.Box.TopLeft.To = tl_h_to; esp.Box.TopLeft.Visible = true
-            esp.Box.Left.From = tl_v_from; esp.Box.Left.To = tl_v_to; esp.Box.Left.Visible = true
+            pcall(function()
+                if esp.Box.TopLeft then esp.Box.TopLeft.From, esp.Box.TopLeft.To, esp.Box.TopLeft.Visible = tl_h_from, tl_h_to, true end
+                if esp.Box.Left then esp.Box.Left.From, esp.Box.Left.To, esp.Box.Left.Visible = tl_v_from, tl_v_to, true end
+            end)
 
-            -- top-right corner
             local tr_h_from = boxPosition + Vector2.new(boxSize.X - cornerSize, 0)
             local tr_h_to = boxPosition + Vector2.new(boxSize.X, 0)
             local tr_v_from = boxPosition + Vector2.new(boxSize.X, 0)
             local tr_v_to = boxPosition + Vector2.new(boxSize.X, cornerSize)
 
-            esp.Box.TopRight.From = tr_h_from; esp.Box.TopRight.To = tr_h_to; esp.Box.TopRight.Visible = true
-            esp.Box.Right.From = tr_v_from; esp.Box.Right.To = tr_v_to; esp.Box.Right.Visible = true
+            pcall(function()
+                if esp.Box.TopRight then esp.Box.TopRight.From, esp.Box.TopRight.To, esp.Box.TopRight.Visible = tr_h_from, tr_h_to, true end
+                if esp.Box.Right then esp.Box.Right.From, esp.Box.Right.To, esp.Box.Right.Visible = tr_v_from, tr_v_to, true end
+            end)
 
-            -- bottom-left corner
             local bl_h_from = boxPosition + Vector2.new(0, boxSize.Y)
             local bl_h_to = boxPosition + Vector2.new(cornerSize, boxSize.Y)
             local bl_v_from = boxPosition + Vector2.new(0, boxSize.Y - cornerSize)
             local bl_v_to = boxPosition + Vector2.new(0, boxSize.Y)
 
-            esp.Box.BottomLeft.From = bl_h_from; esp.Box.BottomLeft.To = bl_h_to; esp.Box.BottomLeft.Visible = true
-            -- reuse Left for bottom-left vertical
-            esp.Box.Left.From = bl_v_from; esp.Box.Left.To = bl_v_to; esp.Box.Left.Visible = true
+            pcall(function()
+                if esp.Box.BottomLeft then esp.Box.BottomLeft.From, esp.Box.BottomLeft.To, esp.Box.BottomLeft.Visible = bl_h_from, bl_h_to, true end
+                if esp.Box.Left then esp.Box.Left.From, esp.Box.Left.To, esp.Box.Left.Visible = bl_v_from, bl_v_to, true end
+            end)
 
-            -- bottom-right corner
             local br_h_from = boxPosition + Vector2.new(boxSize.X - cornerSize, boxSize.Y)
             local br_h_to = boxPosition + Vector2.new(boxSize.X, boxSize.Y)
             local br_v_from = boxPosition + Vector2.new(boxSize.X, boxSize.Y - cornerSize)
             local br_v_to = boxPosition + Vector2.new(boxSize.X, boxSize.Y)
 
-            esp.Box.BottomRight.From = br_h_from; esp.Box.BottomRight.To = br_h_to; esp.Box.BottomRight.Visible = true
-            esp.Box.Right.From = br_v_from; esp.Box.Right.To = br_v_to; esp.Box.Right.Visible = true
+            pcall(function()
+                if esp.Box.BottomRight then esp.Box.BottomRight.From, esp.Box.BottomRight.To, esp.Box.BottomRight.Visible = br_h_from, br_h_to, true end
+                if esp.Box.Right then esp.Box.Right.From, esp.Box.Right.To, esp.Box.Right.Visible = br_v_from, br_v_to, true end
+            end)
 
-            -- apply color & thickness
             for key, obj in pairs(esp.Box) do
-                if key ~= "Connectors" and obj.Visible then
-                    obj.Color = color
-                    obj.Thickness = Settings.BoxThickness
+                if key ~= "Connectors" and obj and obj.Visible then
+                    pcall(function()
+                        obj.Color = color
+                        obj.Thickness = Settings.BoxThickness
+                    end)
                 end
             end
 
-        else -- Full box
-            -- Full rectangle (Top, Bottom, Left, Right)
-            esp.Box.Top.From = boxPosition
-            esp.Box.Top.To = boxPosition + Vector2.new(boxSize.X, 0)
-            esp.Box.Top.Visible = true
+        else -- Full
+            pcall(function()
+                if esp.Box.Top then esp.Box.Top.From, esp.Box.Top.To, esp.Box.Top.Visible = boxPosition, boxPosition + Vector2.new(boxSize.X, 0), true end
+                if esp.Box.Bottom then esp.Box.Bottom.From, esp.Box.Bottom.To, esp.Box.Bottom.Visible = boxPosition + Vector2.new(0, boxSize.Y), boxPosition + Vector2.new(boxSize.X, boxSize.Y), true end
+                if esp.Box.Left then esp.Box.Left.From, esp.Box.Left.To, esp.Box.Left.Visible = boxPosition, boxPosition + Vector2.new(0, boxSize.Y), true end
+                if esp.Box.Right then esp.Box.Right.From, esp.Box.Right.To, esp.Box.Right.Visible = boxPosition + Vector2.new(boxSize.X, 0), boxPosition + Vector2.new(boxSize.X, boxSize.Y), true end
 
-            esp.Box.Bottom.From = boxPosition + Vector2.new(0, boxSize.Y)
-            esp.Box.Bottom.To = boxPosition + Vector2.new(boxSize.X, boxSize.Y)
-            esp.Box.Bottom.Visible = true
+                if esp.Box.TopLeft then esp.Box.TopLeft.Visible = false end
+                if esp.Box.TopRight then esp.Box.TopRight.Visible = false end
+                if esp.Box.BottomLeft then esp.Box.BottomLeft.Visible = false end
+                if esp.Box.BottomRight then esp.Box.BottomRight.Visible = false end
 
-            esp.Box.Left.From = boxPosition
-            esp.Box.Left.To = boxPosition + Vector2.new(0, boxSize.Y)
-            esp.Box.Left.Visible = true
-
-            esp.Box.Right.From = boxPosition + Vector2.new(boxSize.X, 0)
-            esp.Box.Right.To = boxPosition + Vector2.new(boxSize.X, boxSize.Y)
-            esp.Box.Right.Visible = true
-
-            -- hide corner-only lines
-            esp.Box.TopLeft.Visible = false
-            esp.Box.TopRight.Visible = false
-            esp.Box.BottomLeft.Visible = false
-            esp.Box.BottomRight.Visible = false
-
-            for _, obj in pairs({esp.Box.Top, esp.Box.Bottom, esp.Box.Left, esp.Box.Right}) do
-                obj.Color = color
-                obj.Thickness = Settings.BoxThickness
-            end
+                for _, obj in pairs({esp.Box.Top, esp.Box.Bottom, esp.Box.Left, esp.Box.Right}) do
+                    if obj then
+                        obj.Color = color
+                        obj.Thickness = Settings.BoxThickness
+                    end
+                end
+            end)
         end
     end
 
-    if Settings.TracerESP then
-        esp.Tracer.From = GetTracerOrigin()
-        esp.Tracer.To = Vector2.new(pos.X, pos.Y)
-        esp.Tracer.Color = color
-        esp.Tracer.Visible = true
-        esp.Tracer.Thickness = Settings.TracerThickness
+    -- TRACER
+    if Settings.TracerESP and esp.Tracer then
+        pcall(function()
+            esp.Tracer.From = GetTracerOrigin()
+            esp.Tracer.To = Vector2.new(worldPoint.X, worldPoint.Y)
+            esp.Tracer.Color = color
+            esp.Tracer.Visible = true
+            esp.Tracer.Thickness = Settings.TracerThickness
+        end)
     else
-        esp.Tracer.Visible = false
+        pcall(function() if esp.Tracer then esp.Tracer.Visible = false end end)
     end
 
-    if Settings.HealthESP then
+    -- HEALTH
+    if Settings.HealthESP and esp.HealthBar then
         local health = humanoid.Health
         local maxHealth = humanoid.MaxHealth
         local healthPercent = (maxHealth > 0) and (health / maxHealth) or 0
@@ -657,58 +531,62 @@ local function UpdateESP(player)
             boxPosition.Y + (screenSize - barHeight)/2
         )
 
-        esp.HealthBar.Outline.Size = Vector2.new(barWidth, barHeight)
-        esp.HealthBar.Outline.Position = barPos
-        esp.HealthBar.Outline.Visible = true
+        pcall(function()
+            esp.HealthBar.Outline.Size = Vector2.new(barWidth, barHeight)
+            esp.HealthBar.Outline.Position = barPos
+            esp.HealthBar.Outline.Visible = true
 
-        esp.HealthBar.Fill.Size = Vector2.new(barWidth - 2, math.clamp(barHeight * healthPercent, 0, barHeight))
-        esp.HealthBar.Fill.Position = Vector2.new(barPos.X + 1, barPos.Y + barHeight * (1 - healthPercent))
-        esp.HealthBar.Fill.Color = Color3.fromRGB(math.floor(255 - (255 * healthPercent)), math.floor(255 * healthPercent), 0)
-        esp.HealthBar.Fill.Visible = true
+            esp.HealthBar.Fill.Size = Vector2.new(barWidth - 2, math.clamp(barHeight * healthPercent, 0, barHeight))
+            esp.HealthBar.Fill.Position = Vector2.new(barPos.X + 1, barPos.Y + barHeight * (1 - healthPercent))
+            esp.HealthBar.Fill.Color = Color3.fromRGB(math.floor(255 - (255 * healthPercent)), math.floor(255 * healthPercent), 0)
+            esp.HealthBar.Fill.Visible = true
 
-        if Settings.HealthStyle == "Both" or Settings.HealthStyle == "Text" then
-            local textValue = ""
-            if Settings.HealthTextFormat == "Number" then
-                textValue = tostring(math.floor(health)) .. Settings.HealthTextSuffix
-            elseif Settings.HealthTextFormat == "Percentage" then
-                textValue = tostring(math.floor(healthPercent * 100)) .. "%"
+            if Settings.HealthStyle == "Both" or Settings.HealthStyle == "Text" then
+                local textValue = ""
+                if Settings.HealthTextFormat == "Number" then
+                    textValue = tostring(math.floor(health)) .. Settings.HealthTextSuffix
+                elseif Settings.HealthTextFormat == "Percentage" then
+                    textValue = tostring(math.floor(healthPercent * 100)) .. "%"
+                else
+                    textValue = tostring(math.floor(health)) .. " | " .. tostring(math.floor(healthPercent * 100)) .. "%"
+                end
+                esp.HealthBar.Text.Text = textValue
+                esp.HealthBar.Text.Position = Vector2.new(barPos.X + barWidth + 6, barPos.Y + barHeight/2)
+                esp.HealthBar.Text.Visible = true
             else
-                textValue = tostring(math.floor(health)) .. " | " .. tostring(math.floor(healthPercent * 100)) .. "%"
+                esp.HealthBar.Text.Visible = false
             end
-            esp.HealthBar.Text.Text = textValue
-            esp.HealthBar.Text.Position = Vector2.new(barPos.X + barWidth + 6, barPos.Y + barHeight/2)
-            esp.HealthBar.Text.Visible = true
-        else
-            esp.HealthBar.Text.Visible = false
-        end
+        end)
     else
-        for _, obj in pairs(esp.HealthBar) do
-            obj.Visible = false
-        end
+        if esp.HealthBar then for _, o in pairs(esp.HealthBar) do pcall(function() if o then o.Visible = false end end) end end
     end
 
-    if Settings.NameESP then
-        esp.Info.Name.Text = player.DisplayName
-        esp.Info.Name.Position = Vector2.new(
-            boxPosition.X + boxWidth/2,
-            boxPosition.Y - 18
-        )
-        esp.Info.Name.Color = color
-        esp.Info.Name.Size = Settings.TextSize
-        esp.Info.Name.Visible = true
+    -- NAME
+    if Settings.NameESP and esp.Info and esp.Info.Name then
+        pcall(function()
+            esp.Info.Name.Text = player.DisplayName or player.Name
+            esp.Info.Name.Position = Vector2.new(boxPosition.X + boxWidth/2, boxPosition.Y - 18)
+            esp.Info.Name.Color = color
+            esp.Info.Name.Size = Settings.TextSize
+            esp.Info.Name.Visible = true
+        end)
     else
-        esp.Info.Name.Visible = false
+        pcall(function() if esp.Info and esp.Info.Name then esp.Info.Name.Visible = false end end)
     end
 
-    if Settings.Snaplines then
-        esp.Snapline.From = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y)
-        esp.Snapline.To = Vector2.new(pos.X, pos.Y)
-        esp.Snapline.Color = color
-        esp.Snapline.Visible = true
+    -- SNAPLINES
+    if Settings.Snaplines and esp.Snapline then
+        pcall(function()
+            esp.Snapline.From = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y)
+            esp.Snapline.To = Vector2.new(worldPoint.X, worldPoint.Y)
+            esp.Snapline.Color = color
+            esp.Snapline.Visible = true
+        end)
     else
-        esp.Snapline.Visible = false
+        pcall(function() if esp.Snapline then esp.Snapline.Visible = false end end)
     end
 
+    -- CHAMS / HIGHLIGHT
     local highlight = Highlights[player]
     if highlight then
         if Settings.ChamsEnabled and character then
@@ -723,145 +601,102 @@ local function UpdateESP(player)
         end
     end
 
+    -- SKELETON
     if Settings.SkeletonESP then
-        local function getBonePositions(character)
-            if not character then return nil end
-
-            local bones = {
-                Head = character:FindFirstChild("Head"),
-                UpperTorso = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso"),
-                LowerTorso = character:FindFirstChild("LowerTorso") or character:FindFirstChild("Torso"),
-                RootPart = character:FindFirstChild("HumanoidRootPart"),
-
-                -- Left Arm
-                LeftUpperArm = character:FindFirstChild("LeftUpperArm") or character:FindFirstChild("Left Arm"),
-                LeftLowerArm = character:FindFirstChild("LeftLowerArm") or character:FindFirstChild("Left Arm"),
-                LeftHand = character:FindFirstChild("LeftHand") or character:FindFirstChild("Left Arm"),
-
-                -- Right Arm
-                RightUpperArm = character:FindFirstChild("RightUpperArm") or character:FindFirstChild("Right Arm"),
-                RightLowerArm = character:FindFirstChild("RightLowerArm") or character:FindFirstChild("Right Arm"),
-                RightHand = character:FindFirstChild("RightHand") or character:FindFirstChild("Right Arm"),
-
-                -- Left Leg
-                LeftUpperLeg = character:FindFirstChild("LeftUpperLeg") or character:FindFirstChild("Left Leg"),
-                LeftLowerLeg = character:FindFirstChild("LeftLowerLeg") or character:FindFirstChild("Left Leg"),
-                LeftFoot = character:FindFirstChild("LeftFoot") or character:FindFirstChild("Left Leg"),
-
-                -- Right Leg
-                RightUpperLeg = character:FindFirstChild("RightUpperLeg") or character:FindFirstChild("Right Leg"),
-                RightLowerLeg = character:FindFirstChild("RightLowerLeg") or character:FindFirstChild("Right Leg"),
-                RightFoot = character:FindFirstChild("RightFoot") or character:FindFirstChild("Right Leg")
-            }
-
-            -- Verify we have the minimum required bones
-            if not (bones.Head and bones.UpperTorso) then return nil end
-
-            return bones
+        local function findPart(...)
+            for i = 1, select("#", ...) do
+                local name = select(i, ...)
+                local p = character:FindFirstChild(name)
+                if p then return p end
+            end
+            return nil
         end
 
-        local function drawBone(from, to, line)
-            if not from or not to then 
-                line.Visible = false
-                return 
+        local bones = {
+            Head = findPart("Head"),
+            UpperTorso = findPart("UpperTorso", "Torso"),
+            LowerTorso = findPart("LowerTorso", "Torso"),
+            RootPart = findPart("HumanoidRootPart"),
+
+            LeftUpperArm = findPart("LeftUpperArm", "Left Arm"),
+            LeftLowerArm = findPart("LeftLowerArm", "Left Arm"),
+            LeftHand = findPart("LeftHand", "Left Arm"),
+
+            RightUpperArm = findPart("RightUpperArm", "Right Arm"),
+            RightLowerArm = findPart("RightLowerArm", "Right Arm"),
+            RightHand = findPart("RightHand", "Right Arm"),
+
+            LeftUpperLeg = findPart("LeftUpperLeg", "Left Leg"),
+            LeftLowerLeg = findPart("LeftLowerLeg", "Left Leg"),
+            LeftFoot = findPart("LeftFoot", "Left Leg"),
+
+            RightUpperLeg = findPart("RightUpperLeg", "Right Leg"),
+            RightLowerLeg = findPart("RightLowerLeg", "Right Leg"),
+            RightFoot = findPart("RightFoot", "Right Leg")
+        }
+
+        local function drawBone(fromPart, toPart, line)
+            if not fromPart or not toPart or not line then
+                pcall(function() if line then line.Visible = false end end)
+                return
             end
-
-            -- Get center positions of the parts
-            local fromPos = (from.CFrame * CFrame.new(0, 0, 0)).Position
-            local toPos = (to.CFrame * CFrame.new(0, 0, 0)).Position
-
-            -- Convert to screen positions with proper depth check
+            local fromPos = fromPart.Position
+            local toPos = toPart.Position
             local fromScreen, fromVisible = Camera:WorldToViewportPoint(fromPos)
             local toScreen, toVisible = Camera:WorldToViewportPoint(toPos)
-
-            -- Only show if both points are visible and in front of camera
-            if not (fromVisible and toVisible) or fromScreen.Z < 0 or toScreen.Z < 0 then
-                line.Visible = false
+            if not fromVisible or not toVisible or fromScreen.Z < 0 or toScreen.Z < 0 then
+                pcall(function() line.Visible = false end)
+                return
+            end
+            local w, h = Camera.ViewportSize.X, Camera.ViewportSize.Y
+            if fromScreen.X < 0 or fromScreen.X > w or fromScreen.Y < 0 or fromScreen.Y > h or toScreen.X < 0 or toScreen.X > w or toScreen.Y < 0 or toScreen.Y > h then
+                pcall(function() line.Visible = false end)
                 return
             end
 
-            -- Check if points are within screen bounds
-            local screenBounds = Camera.ViewportSize
-            if fromScreen.X < 0 or fromScreen.X > screenBounds.X or
-               fromScreen.Y < 0 or fromScreen.Y > screenBounds.Y or
-               toScreen.X < 0 or toScreen.X > screenBounds.X or
-               toScreen.Y < 0 or toScreen.Y > screenBounds.Y then
-                line.Visible = false
-                return
-            end
-
-            -- Update line with screen positions
-            line.From = Vector2.new(fromScreen.X, fromScreen.Y)
-            line.To = Vector2.new(toScreen.X, toScreen.Y)
-            line.Color = Settings.SkeletonColor
-            line.Thickness = Settings.SkeletonThickness
-            line.Transparency = Settings.SkeletonTransparency
-            line.Visible = true
+            pcall(function()
+                line.From = Vector2.new(fromScreen.X, fromScreen.Y)
+                line.To = Vector2.new(toScreen.X, toScreen.Y)
+                line.Color = Settings.SkeletonColor
+                line.Thickness = Settings.SkeletonThickness
+                line.Transparency = Settings.SkeletonTransparency
+                line.Visible = true
+            end)
         end
 
-        local bones = getBonePositions(character)
-        if bones then
-            local skeleton = Drawings.Skeleton[player]
-            if skeleton then
-                -- Spine & Head
-                drawBone(bones.Head, bones.UpperTorso, skeleton.Head)
-                drawBone(bones.UpperTorso, bones.LowerTorso, skeleton.UpperSpine)
+        local sk = Drawings.Skeleton[player]
+        if sk then
+            drawBone(bones.Head, bones.UpperTorso, sk.Head)
+            drawBone(bones.UpperTorso, bones.LowerTorso, sk.UpperSpine)
 
-                -- Left Arm Chain
-                drawBone(bones.UpperTorso, bones.LeftUpperArm, skeleton.LeftShoulder)
-                drawBone(bones.LeftUpperArm, bones.LeftLowerArm, skeleton.LeftUpperArm)
-                drawBone(bones.LeftLowerArm, bones.LeftHand, skeleton.LeftLowerArm)
+            drawBone(bones.UpperTorso, bones.LeftUpperArm, sk.LeftShoulder)
+            drawBone(bones.LeftUpperArm, bones.LeftLowerArm, sk.LeftUpperArm)
+            drawBone(bones.LeftLowerArm, bones.LeftHand, sk.LeftLowerArm)
 
-                -- Right Arm Chain
-                drawBone(bones.UpperTorso, bones.RightUpperArm, skeleton.RightShoulder)
-                drawBone(bones.RightUpperArm, bones.RightLowerArm, skeleton.RightUpperArm)
-                drawBone(bones.RightLowerArm, bones.RightHand, skeleton.RightLowerArm)
+            drawBone(bones.UpperTorso, bones.RightUpperArm, sk.RightShoulder)
+            drawBone(bones.RightUpperArm, bones.RightLowerArm, sk.RightUpperArm)
+            drawBone(bones.RightLowerArm, bones.RightHand, sk.RightLowerArm)
 
-                -- Left Leg Chain
-                drawBone(bones.LowerTorso, bones.LeftUpperLeg, skeleton.LeftHip)
-                drawBone(bones.LeftUpperLeg, bones.LeftLowerLeg, skeleton.LeftUpperLeg)
-                drawBone(bones.LeftLowerLeg, bones.LeftFoot, skeleton.LeftLowerLeg)
+            drawBone(bones.LowerTorso, bones.LeftUpperLeg, sk.LeftHip)
+            drawBone(bones.LeftUpperLeg, bones.LeftLowerLeg, sk.LeftUpperLeg)
+            drawBone(bones.LeftLowerLeg, bones.LeftFoot, sk.LeftLowerLeg)
 
-                -- Right Leg Chain
-                drawBone(bones.LowerTorso, bones.RightUpperLeg, skeleton.RightHip)
-                drawBone(bones.RightUpperLeg, bones.RightLowerLeg, skeleton.RightUpperLeg)
-                drawBone(bones.RightLowerLeg, bones.RightFoot, skeleton.RightLowerLeg)
-            end
+            drawBone(bones.LowerTorso, bones.RightUpperLeg, sk.RightHip)
+            drawBone(bones.RightUpperLeg, bones.RightLowerLeg, sk.RightUpperLeg)
+            drawBone(bones.RightLowerLeg, bones.RightFoot, sk.RightLowerLeg)
         end
     else
-        local skeleton = Drawings.Skeleton[player]
-        if skeleton then
-            for _, line in pairs(skeleton) do
-                line.Visible = false
-            end
-        end
+        local sk = Drawings.Skeleton[player]
+        if sk then for _, l in pairs(sk) do pcall(function() l.Visible = false end) end end
     end
 end
 
 local function DisableESP()
     for _, player in ipairs(Players:GetPlayers()) do
         local esp = Drawings.ESP[player]
-        if esp then
-            for key, obj in pairs(esp.Box) do
-                if key == "Connectors" then
-                    for _, c in ipairs(obj) do c.Visible = false end
-                else
-                    obj.Visible = false
-                end
-            end
-            esp.Tracer.Visible = false
-            for _, obj in pairs(esp.HealthBar) do obj.Visible = false end
-            for _, obj in pairs(esp.Info) do obj.Visible = false end
-            esp.Snapline.Visible = false
-        end
-
-        -- Also hide skeleton
+        if esp then HideAllDrawingsForESP(esp) end
         local skeleton = Drawings.Skeleton[player]
-        if skeleton then
-            for _, line in pairs(skeleton) do
-                line.Visible = false
-            end
-        end
+        if skeleton then for _, line in pairs(skeleton) do pcall(function() line.Visible = false end) end end
     end
 end
 
@@ -873,6 +708,8 @@ local function CleanupESP()
     Drawings.Skeleton = {}
     Highlights = {}
 end
+
+-- ========== UI (full reinserted) ==========
 
 local Window = Fluent:CreateWindow({
     Title = "WA Universal ESP",
@@ -1222,64 +1059,20 @@ do
         Title = "Unload ESP",
         Description = "Completely remove the ESP",
         Callback = function()
-            CleanupESP()
-            for _, connection in pairs(getconnections(RunService.RenderStepped)) do
-                connection:Disable()
-            end
-            Window:Destroy()
-            Drawings = nil
-            Settings = nil
-            for k, v in pairs(getfenv(1)) do
-                getfenv(1)[k] = nil
+            -- call Unload implemented later
+            if type(_G.__WA_UnloadESP) == "function" then
+                pcall(_G.__WA_UnloadESP)
+            else
+                -- fallback
+                CleanupESP()
+                if renderConnection and renderConnection.Disconnect then pcall(function() renderConnection:Disconnect() end) end
+                pcall(function() Window:Destroy() end)
             end
         end
     })
 end
 
-task.spawn(function()
-    while task.wait(0.1) do
-        Colors.Rainbow = Color3.fromHSV(tick() * Settings.RainbowSpeed % 1, 1, 1)
-    end
-end)
-
-local lastUpdate = 0
-RunService.RenderStepped:Connect(function()
-    if not Settings.Enabled then 
-        DisableESP()
-        return 
-    end
-
-    local currentTime = tick()
-    if currentTime - lastUpdate >= Settings.RefreshRate then
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player ~= LocalPlayer then
-                if not Drawings.ESP[player] then
-                    CreateESP(player)
-                end
-                UpdateESP(player)
-            end
-        end
-        lastUpdate = currentTime
-    end
-end)
-
-Players.PlayerAdded:Connect(CreateESP)
-Players.PlayerRemoving:Connect(RemoveESP)
-
-for _, player in ipairs(Players:GetPlayers()) do
-    if player ~= LocalPlayer then
-        CreateESP(player)
-    end
-end
-
-Window:SelectTab(1)
-
-Fluent:Notify({
-    Title = "WA Universal ESP",
-    Content = "Loaded successfully!",
-    Duration = 5
-})
-
+-- skeleton section UI (keep at end)
 local SkeletonSection = Tabs.ESP:AddSection("Skeleton ESP")
 
 local SkeletonESPToggle = SkeletonSection:AddToggle("SkeletonESP", {
@@ -1300,7 +1093,7 @@ SkeletonColor:OnChanged(function(Value)
         local skeleton = Drawings.Skeleton[player]
         if skeleton then
             for _, line in pairs(skeleton) do
-                line.Color = Value
+                if line then pcall(function() line.Color = Value end) end
             end
         end
     end
@@ -1319,7 +1112,7 @@ SkeletonThickness:OnChanged(function(Value)
         local skeleton = Drawings.Skeleton[player]
         if skeleton then
             for _, line in pairs(skeleton) do
-                line.Thickness = Value
+                if line then pcall(function() line.Thickness = Value end) end
             end
         end
     end
@@ -1338,8 +1131,72 @@ SkeletonTransparency:OnChanged(function(Value)
         local skeleton = Drawings.Skeleton[player]
         if skeleton then
             for _, line in pairs(skeleton) do
-                line.Transparency = Value
+                if line then pcall(function() line.Transparency = Value end) end
             end
         end
     end
 end)
+
+Window:SelectTab(1)
+Fluent:Notify({ Title = "WA Universal ESP", Content = "Loaded successfully!", Duration = 5 })
+
+-- Rainbow updater
+task.spawn(function()
+    while task.wait(0.05) do
+        Colors.Rainbow = Color3.fromHSV((tick() * (Settings.RainbowSpeed or 1)) % 1, 1, 1)
+    end
+end)
+
+-- Render loop (store connection so we can disconnect on unload)
+local renderConnection
+local lastUpdate = 0
+renderConnection = RunService.RenderStepped:Connect(function()
+    if not Settings.Enabled then
+        DisableESP()
+        return
+    end
+
+    local currentTime = tick()
+    if currentTime - lastUpdate >= Settings.RefreshRate then
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then
+                if not Drawings.ESP[player] then
+                    CreateESP(player)
+                end
+                UpdateESP(player)
+            end
+        end
+        lastUpdate = currentTime
+    end
+end)
+
+-- player events
+Players.PlayerAdded:Connect(function(pl)
+    if pl ~= LocalPlayer then CreateESP(pl) end
+end)
+Players.PlayerRemoving:Connect(function(pl)
+    RemoveESP(pl)
+end)
+
+-- init existing players
+for _, player in ipairs(Players:GetPlayers()) do
+    if player ~= LocalPlayer then CreateESP(player) end
+end
+
+-- Unload helper accessible to UI callback
+local function Unload()
+    CleanupESP()
+    if renderConnection and renderConnection.Disconnect then
+        pcall(function() renderConnection:Disconnect() end)
+    end
+    if Window and type(Window.Destroy) == "function" then
+        pcall(function() Window:Destroy() end)
+    end
+    -- clear any global pointer we set
+    _G.__WA_UnloadESP = nil
+end
+
+-- let SaveManager UI call it
+_G.__WA_UnloadESP = Unload
+
+-- End of script

@@ -403,23 +403,6 @@ local function UpdateESP(player)
         end
         return 
     end
-
-    local NameToggle = MainSection:AddToggle("NameESP", {
-        Title = "Show Name",
-        Default = false
-    })
-    NameToggle:OnChanged(function()
-        Settings.NameESP = NameToggle.Value
-    end)
-
-    local NameModeDropdown = MainSection:AddDropdown("NameMode", {
-        Title = "Name Mode",
-        Values = {"DisplayName", "Name"},
-        Default = "DisplayName"
-    })
-    NameModeDropdown:OnChanged(function(val)
-        Settings.NameMode = val
-    end)
     
     local rootPart = character:FindFirstChild("HumanoidRootPart")
     if not rootPart then 
@@ -716,9 +699,8 @@ local function UpdateESP(player)
         end
     end
     
-    if Settings.NameESP and esp.Info and esp.Info.Name then
-        local nameText = (Settings.NameMode == "DisplayName" and player.DisplayName and tostring(player.DisplayName) ~= "" and player.DisplayName) or player.Name
-        esp.Info.Name.Text = nameText
+    if Settings.NameESP then
+        esp.Info.Name.Text = player.DisplayName
         esp.Info.Name.Position = Vector2.new(
             boxPosition.X + boxWidth/2,
             boxPosition.Y - 20
@@ -726,7 +708,7 @@ local function UpdateESP(player)
         esp.Info.Name.Color = color
         esp.Info.Name.Visible = true
     else
-        if esp.Info and esp.Info.Name then esp.Info.Name.Visible = false end
+        esp.Info.Name.Visible = false
     end
     
     if Settings.Snaplines then

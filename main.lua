@@ -688,7 +688,7 @@ local function UpdateESP(player)
         
         if Settings.HealthStyle == "Both" or Settings.HealthStyle == "Text" then
             esp.HealthBar.Text.Text = math.floor(health) .. Settings.HealthTextSuffix
-            esp.HealthBar.Text.Position = Vector2.new(barPos.X + barWidth + 150, barPos.Y + barHeight/2)
+            esp.HealthBar.Text.Position = Vector2.new(barPos.X + barWidth - 20, barPos.Y + barHeight/2)
             esp.HealthBar.Text.Visible = true
         else
             esp.HealthBar.Text.Visible = false
@@ -962,8 +962,6 @@ do
     TracerOriginDropdown:OnChanged(function(Value)
         Settings.TracerOrigin = Value
     end)
-    
-    local ChamsSection = Tabs.ESP:AddSection("Chams")
     
     local ChamsToggle = ChamsSection:AddToggle("ChamsEnabled", {
         Title = "Enable Chams",

@@ -962,11 +962,6 @@ do
     TracerOriginDropdown:OnChanged(function(Value)
         Settings.TracerOrigin = Value
     end)
-    
-    local ChamsToggle = ChamsSection:AddToggle("ChamsEnabled", {
-        Title = "Enable Chams",
-        Default = false
-    })
 
     local HealthSection = Tabs.ESP:AddSection("Health ESP")
     

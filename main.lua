@@ -669,27 +669,33 @@ local function UpdateESP(player)
         
         esp.HealthBar.Outline.Size = Vector2.new(barWidth, barHeight)
         esp.HealthBar.Outline.Position = barPos
-        esp.HealthBar.Outline.Visible = true
         
         esp.HealthBar.Fill.Size = Vector2.new(barWidth - 2, barHeight * healthPercent)
         esp.HealthBar.Fill.Position = Vector2.new(barPos.X + 1, barPos.Y + barHeight * (1-healthPercent))
         esp.HealthBar.Fill.Color = Color3.fromRGB(255 - (255 * healthPercent), 255 * healthPercent, 0)
-        esp.HealthBar.Fill.Visible = true
-        
-        if Settings.HealthStyle == "Both" or Settings.HealthStyle == "Text" then
-            esp.HealthBar.Text.Text = math.floor(health) .. Settings.HealthTextSuffix
-            esp.HealthBar.Text.Position = Vector2.new(barPos.X + barWidth - 10, barPos.Y + barHeight/2)
-            esp.HealthBar.Text.Visible = true
-        else
-            esp.HealthBar.Text.Visible = false
-        end
 
-        if Settings.HealthStyle ~= "Both" or Settings.HealthStyle ~= "Bar" then
-            esp.HealthBar.Outline.Visible = false
-            esp.HealthBar.Fill.Visible = false
-        else
+        esp.HealthBar.Text.Text = math.floor(health) .. Settings.HealthTextSuffix
+        esp.HealthBar.Text.Position = Vector2.new(barPos.X + barWidth - 10, barPos.Y + barHeight/2)
+
+        esp.HealthBar.Fill.Visible = true
+        esp.HealthBar.Outline.Visible = true
+
+        if Settings.HealthStyle == "Both" then
+            esp.HealthBar.Text.Visible = true
             esp.HealthBar.Outline.Visible = true
             esp.HealthBar.Fill.Visible = true
+        end
+
+        if Settings.HealthStyle == "Text" then
+            esp.HealthBar.Text.Visible = true
+            esp.HealthBar.Outline.Visible = false
+            esp.HealthBar.Fill.Visible = false
+        end
+
+        if Settings.HealthStyle == "Bar" then
+            esp.HealthBar.Outline.Visible = true
+            esp.HealthBar.Fill.Visible = true
+            esp.HealthBar.Text.Visible = false
         end
     else
         for _, obj in pairs(esp.HealthBar) do

@@ -158,7 +158,7 @@ local Settings = {
     HealthStyle = "Bar",
     HealthBarSide = "Left",
     HealthTextSuffix = "HP",
-    NameESP = false,
+    NameESP = true,
     NameMode = "DisplayName",
     ShowDistance = true,
     DistanceUnit = "studs",
@@ -679,18 +679,32 @@ local function UpdateESP(player)
         
         esp.HealthBar.Outline.Size = Vector2.new(barWidth, barHeight)
         esp.HealthBar.Outline.Position = barPos
-        esp.HealthBar.Outline.Visible = true
         
         esp.HealthBar.Fill.Size = Vector2.new(barWidth - 2, barHeight * healthPercent)
         esp.HealthBar.Fill.Position = Vector2.new(barPos.X + 1, barPos.Y + barHeight * (1-healthPercent))
         esp.HealthBar.Fill.Color = Color3.fromRGB(255 - (255 * healthPercent), 255 * healthPercent, 0)
+
+        esp.HealthBar.Text.Text = math.floor(health) .. Settings.HealthTextSuffix
+        esp.HealthBar.Text.Position = Vector2.new(barPos.X + barWidth - 20, barPos.Y + barHeight/2)
+
         esp.HealthBar.Fill.Visible = true
+        esp.HealthBar.Outline.Visible = true
         
-        if Settings.HealthStyle == "Both" or Settings.HealthStyle == "Text" then
-            esp.HealthBar.Text.Text = math.floor(health) .. Settings.HealthTextSuffix
-            esp.HealthBar.Text.Position = Vector2.new(barPos.X + barWidth + 2, barPos.Y + barHeight/2)
+        if Settings.HealthStyle == "Both" then
+            esp.HealthBar.Fill.Visible = true
+            esp.HealthBar.Outline.Visible = true
             esp.HealthBar.Text.Visible = true
-        else
+        end
+
+        if Settings.HealthStyle == "Text" then
+            esp.HealthBar.Fill.Visible = false
+            esp.HealthBar.Outline.Visible = false
+            esp.HealthBar.Text.Visible = true
+        end
+
+        if Settings.HealthStyle == "Bar" then
+            esp.HealthBar.Fill.Visible = true
+            esp.HealthBar.Outline.Visible = true
             esp.HealthBar.Text.Visible = false
         end
     else

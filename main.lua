@@ -1,6 +1,109 @@
 --[[ how esp works:
 
-    (header kept unchanged)
+    layout:
+    ┌─────────┐  
+    │  Name   │  <- name/info
+    │ [100HP] │  <- health text
+    ├──┐  ┌──┤  <- box corners
+    │  │  │  │
+    │  └──┘  │
+    ║   │    │  <- health bar (left/right)
+    └───║────┘
+        ║      <- tracer line
+        ▼    
+    [origin]   <- bottom/mouse/center/top
+
+    box types:
+    corners:       full:         3d:
+    ┌─┐  ┌─┐      ┌──────┐      ┌──────┐╗
+    │ │  │ │      │      │      │      │║
+    │ │  │ │      │      │      │      │║
+    └─┘  └─┘      └──────┘      └──────┘║
+                                 ╚═══════╝
+
+    esp creation process:
+    Player -> Character -> HumanoidRootPart
+         │
+         ├─> Box ESP (3 styles)
+         │   ├─> Corner: 8 lines for corners
+         │   ├─> Full: 4 lines for box
+         │   └─> 3D: 12 lines + connectors
+         │
+         ├─> Skeleton ESP
+         │   ├─> Joint Connections
+         │   │   ├─> Head -> Torso
+         │   │   ├─> Torso -> Arms
+         │   │   ├─> Torso -> Legs
+         │   │   └─> Arms/Legs Segments
+         │   ├─> Dynamic Updates
+         │   └─> Color + Thickness
+         │
+         ├─> Chams
+         │   ├─> Character Highlight
+         │   ├─> Fill Color + Transparency
+         │   ├─> Outline Color + Thickness
+         │   └─> Occluded Color (through walls)
+         │
+         ├─> Tracer
+         │   └─> line from origin (4 positions)
+         │
+         ├─> Health Bar
+         │   ├─> outline (background)
+         │   ├─> fill (dynamic color)
+         │   └─> text (HP/percentage)
+         │
+         └─> Info
+             └─> name text
+
+    technical implementation:
+    ┌─ Camera Calculations ─────────────────┐
+    │ 1. Get Character CFrame & Size        │
+    │ 2. WorldToViewportPoint for corners   │
+    │ 3. Convert 3D -> 2D positions         │
+    │ 4. Check if on screen                 │
+    │ 5. Calculate screen dimensions        │
+    └─────────────────────────────────────┘
+
+    ┌─ Drawing Creation ──────────────────┐
+    │ Line:   From/To positions           │
+    │ Square: Position + Size             │
+    │ Text:   Position + String           │
+    │ All:    Color/Transparency/Visible  │
+    └────────────────────────────────────┘
+
+    ┌─ Math & Checks ───────────────────────┐
+    │ Distance = (Player - Camera).Magnitude │
+    │ OnScreen = Z > 0 && in ViewportSize   │
+    │ BoxSize = WorldToScreen(Extents)      │
+    │ Scaling = 1000/Position.Z            │
+    └─────────────────────────────────────┘
+
+    effects:
+    ┌─ Rainbow Options ─┐
+    │ - All            │
+    │ - Box Only       │
+    │ - Tracers Only   │
+    │ - Text Only      │
+    └──────────────────┘
+
+    colors:
+    ┌─ Team Colors ────┐  ┌─ Health Colors ─┐
+    │ Enemy: Red       │  │ Full: Green     │
+    │ Ally: Green     │  │ Low: Red        │
+    │ Rainbow: HSV    │  │ Mid: Yellow     │
+    └────────────────┘  └────────────────┘
+
+    performance:
+    ┌─ Settings ───────┐
+    │ Refresh: 144fps  │
+    │ Distance: 5000   │
+    │ Cleanup: Auto    │
+    └──────────────────┘
+
+    update cycle:
+    RenderStepped -> Check Settings -> Get Positions -> Update Drawings
+         │                                                    │
+         └────────────────── 144fps ─────────────────────────┘
 ]]
 
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
@@ -21,11 +124,8 @@ local Drawings = {
     Names = {},
     Distances = {},
     Snaplines = {},
-    Skeleton = {},
-    State = {} -- <-- per-player cache for throttling name/health updates
+    Skeleton = {}
 }
-
-local NAME_UPDATE_INTERVAL = 0.12 -- throttle for name string updates (seconds)
 
 local Colors = {
     Enemy = Color3.fromRGB(255, 25, 25),
@@ -77,37 +177,9 @@ local Settings = {
     SkeletonTransparency = 1
 }
 
--- Helper to ensure state exists for a player
-local function EnsureState(player)
-    local s = Drawings.State[player]
-    if s then return s end
-    s = {
-        -- name
-        lastName = nil,
-        lastNameColor = nil,
-        nameVisible = false,
-        lastNameTick = 0,
-        -- health
-        lastHealth = -1,
-        lastMaxHealth = -1,
-        lastHealthPercent = -1,
-        lastBoxW = -1,
-        lastBarH = -1,
-        lastBarPosX = -math.huge,
-        lastBarPosY = -math.huge,
-        healthVisible = false,
-        lastHealthText = ""
-    }
-    Drawings.State[player] = s
-    return s
-end
-
 local function CreateESP(player)
     if player == LocalPlayer then return end
     
-    -- avoid recreating
-    if Drawings.ESP[player] then return end
-
     local box = {
         TopLeft = Drawing.new("Line"),
         TopRight = Drawing.new("Line"),
@@ -150,7 +222,6 @@ local function CreateESP(player)
             obj.Size = Settings.TextSize
             obj.Color = Colors.Health
             obj.Font = Settings.TextFont
-            obj.Outline = true
         end
     end
     
@@ -221,9 +292,6 @@ local function CreateESP(player)
         Info = info,
         Snapline = snapline
     }
-
-    -- Initialize state cache for this player
-    EnsureState(player)
 end
 
 local function RemoveESP(player)
@@ -244,9 +312,6 @@ local function RemoveESP(player)
         end
         Drawings.Skeleton[player] = nil
     end
-
-    -- clear cached state
-    Drawings.State[player] = nil
 end
 
 local function GetPlayerColor(player)
@@ -295,115 +360,96 @@ local function UpdateESP(player)
     
     local esp = Drawings.ESP[player]
     if not esp then return end
-
-    local state = EnsureState(player)
     
     local character = player.Character
     if not character then 
-        -- Hide all drawings if character doesn't exist (only if previously visible)
-        if state.visible then
-            for _, obj in pairs(esp.Box) do obj.Visible = false end
-            esp.Tracer.Visible = false
-            for _, obj in pairs(esp.HealthBar) do obj.Visible = false end
-            for _, obj in pairs(esp.Info) do obj.Visible = false end
-            esp.Snapline.Visible = false
-            
-            local skeleton = Drawings.Skeleton[player]
-            if skeleton then
-                for _, line in pairs(skeleton) do
-                    line.Visible = false
-                end
+        -- Hide all drawings if character doesn't exist
+        for _, obj in pairs(esp.Box) do obj.Visible = false end
+        esp.Tracer.Visible = false
+        for _, obj in pairs(esp.HealthBar) do obj.Visible = false end
+        for _, obj in pairs(esp.Info) do obj.Visible = false end
+        esp.Snapline.Visible = false
+        
+        local skeleton = Drawings.Skeleton[player]
+        if skeleton then
+            for _, line in pairs(skeleton) do
+                line.Visible = false
             end
-            state.visible = false
         end
         return 
     end
     
     local rootPart = character:FindFirstChild("HumanoidRootPart")
     if not rootPart then 
-        if state.visible then
-            for _, obj in pairs(esp.Box) do obj.Visible = false end
-            esp.Tracer.Visible = false
-            for _, obj in pairs(esp.HealthBar) do obj.Visible = false end
-            for _, obj in pairs(esp.Info) do obj.Visible = false end
-            esp.Snapline.Visible = false
-            
-            local skeleton = Drawings.Skeleton[player]
-            if skeleton then
-                for _, line in pairs(skeleton) do
-                    line.Visible = false
-                end
+        -- Hide all drawings if rootPart doesn't exist
+        for _, obj in pairs(esp.Box) do obj.Visible = false end
+        esp.Tracer.Visible = false
+        for _, obj in pairs(esp.HealthBar) do obj.Visible = false end
+        for _, obj in pairs(esp.Info) do obj.Visible = false end
+        esp.Snapline.Visible = false
+        
+        local skeleton = Drawings.Skeleton[player]
+        if skeleton then
+            for _, line in pairs(skeleton) do
+                line.Visible = false
             end
-            state.visible = false
         end
         return 
     end
     
     -- Early screen check to hide all drawings if player is off screen
-    local rootVec3, isOnScreen = Camera:WorldToViewportPoint(rootPart.Position)
+    local _, isOnScreen = Camera:WorldToViewportPoint(rootPart.Position)
     if not isOnScreen then
-        if state.visible then
-            for _, obj in pairs(esp.Box) do obj.Visible = false end
-            esp.Tracer.Visible = false
-            for _, obj in pairs(esp.HealthBar) do obj.Visible = false end
-            for _, obj in pairs(esp.Info) do obj.Visible = false end
-            esp.Snapline.Visible = false
-            
-            local skeleton = Drawings.Skeleton[player]
-            if skeleton then
-                for _, line in pairs(skeleton) do
-                    line.Visible = false
-                end
+        for _, obj in pairs(esp.Box) do obj.Visible = false end
+        esp.Tracer.Visible = false
+        for _, obj in pairs(esp.HealthBar) do obj.Visible = false end
+        for _, obj in pairs(esp.Info) do obj.Visible = false end
+        esp.Snapline.Visible = false
+        
+        local skeleton = Drawings.Skeleton[player]
+        if skeleton then
+            for _, line in pairs(skeleton) do
+                line.Visible = false
             end
-            state.visible = false
         end
         return
     end
     
     local humanoid = character:FindFirstChild("Humanoid")
     if not humanoid or humanoid.Health <= 0 then
-        if state.visible then
-            for _, obj in pairs(esp.Box) do obj.Visible = false end
-            esp.Tracer.Visible = false
-            for _, obj in pairs(esp.HealthBar) do obj.Visible = false end
-            for _, obj in pairs(esp.Info) do obj.Visible = false end
-            esp.Snapline.Visible = false
-            
-            local skeleton = Drawings.Skeleton[player]
-            if skeleton then
-                for _, line in pairs(skeleton) do
-                    line.Visible = false
-                end
+        for _, obj in pairs(esp.Box) do obj.Visible = false end
+        esp.Tracer.Visible = false
+        for _, obj in pairs(esp.HealthBar) do obj.Visible = false end
+        for _, obj in pairs(esp.Info) do obj.Visible = false end
+        esp.Snapline.Visible = false
+        
+        local skeleton = Drawings.Skeleton[player]
+        if skeleton then
+            for _, line in pairs(skeleton) do
+                line.Visible = false
             end
-            state.visible = false
         end
         return
     end
     
-    local pos, onScreen = Vector2.new(rootVec3.X, rootVec3.Y), isOnScreen
+    local pos, onScreen = Camera:WorldToViewportPoint(rootPart.Position)
     local distance = (rootPart.Position - Camera.CFrame.Position).Magnitude
     
     if not onScreen or distance > Settings.MaxDistance then
-        if state.visible then
-            for _, obj in pairs(esp.Box) do obj.Visible = false end
-            esp.Tracer.Visible = false
-            for _, obj in pairs(esp.HealthBar) do obj.Visible = false end
-            for _, obj in pairs(esp.Info) do obj.Visible = false end
-            esp.Snapline.Visible = false
-            state.visible = false
-        end
+        for _, obj in pairs(esp.Box) do obj.Visible = false end
+        esp.Tracer.Visible = false
+        for _, obj in pairs(esp.HealthBar) do obj.Visible = false end
+        for _, obj in pairs(esp.Info) do obj.Visible = false end
+        esp.Snapline.Visible = false
         return
     end
     
     if Settings.TeamCheck and player.Team == LocalPlayer.Team and not Settings.ShowTeam then
-        if state.visible then
-            for _, obj in pairs(esp.Box) do obj.Visible = false end
-            esp.Tracer.Visible = false
-            for _, obj in pairs(esp.HealthBar) do obj.Visible = false end
-            for _, obj in pairs(esp.Info) do obj.Visible = false end
-            esp.Snapline.Visible = false
-            state.visible = false
-        end
+        for _, obj in pairs(esp.Box) do obj.Visible = false end
+        esp.Tracer.Visible = false
+        for _, obj in pairs(esp.HealthBar) do obj.Visible = false end
+        for _, obj in pairs(esp.Info) do obj.Visible = false end
+        esp.Snapline.Visible = false
         return
     end
     
@@ -415,10 +461,7 @@ local function UpdateESP(player)
     local bottom, bottom_onscreen = Camera:WorldToViewportPoint(cf * CFrame.new(0, -size.Y/2, 0).Position)
     
     if not top_onscreen or not bottom_onscreen then
-        if state.visible then
-            for _, obj in pairs(esp.Box) do obj.Visible = false end
-            state.visible = false
-        end
+        for _, obj in pairs(esp.Box) do obj.Visible = false end
         return
     end
     
@@ -495,9 +538,7 @@ local function UpdateESP(player)
             esp.Box.Bottom.To = back.BL
             esp.Box.Bottom.Visible = true
             
-            -- Connecting lines (opt'd not to allocate each frame; create local lines and remove quickly is expensive,
-            -- but keeping your behavior intact: we'll create and remove but this is only when BoxStyle==ThreeD and BoxESP)
-            -- If this is still a hotspot, we can pre-create connectors in CreateESP and reuse them.
+            -- Connecting lines
             local function drawConnectingLine(from, to, visible)
                 local line = Drawing.new("Line")
                 line.Visible = visible
@@ -508,6 +549,7 @@ local function UpdateESP(player)
                 return line
             end
             
+            -- Connect front to back
             local connectors = {
                 drawConnectingLine(front.TL, back.TL, true),
                 drawConnectingLine(front.TR, back.TR, true),
@@ -515,6 +557,7 @@ local function UpdateESP(player)
                 drawConnectingLine(front.BR, back.BR, true)
             }
             
+            -- Clean up connecting lines after frame
             task.spawn(function()
                 task.wait()
                 for _, line in ipairs(connectors) do
@@ -597,138 +640,63 @@ local function UpdateESP(player)
         esp.Tracer.Visible = false
     end
     
-    -- ===== optimized HEALTH block =====
-    do
-        local hb = esp.HealthBar
-        if not state then state = EnsureState(player) end
+    if Settings.HealthESP then
+        local health = humanoid.Health
+        local maxHealth = humanoid.MaxHealth
+        local healthPercent = health/maxHealth
+        
+        local barHeight = screenSize * 0.8
+        local barWidth = 4
+        local barPos = Vector2.new(
+            boxPosition.X - barWidth - 2,
+            boxPosition.Y + (screenSize - barHeight)/2
+        )
+        
+        esp.HealthBar.Outline.Size = Vector2.new(barWidth, barHeight)
+        esp.HealthBar.Outline.Position = barPos
+        
+        esp.HealthBar.Fill.Size = Vector2.new(barWidth - 2, barHeight * healthPercent)
+        esp.HealthBar.Fill.Position = Vector2.new(barPos.X + 1, barPos.Y + barHeight * (1-healthPercent))
+        esp.HealthBar.Fill.Color = Color3.fromRGB(255 - (255 * healthPercent), 255 * healthPercent, 0)
 
-        if Settings.HealthESP and humanoid then
-            local health = humanoid.Health
-            local maxHealth = (humanoid.MaxHealth and humanoid.MaxHealth > 0) and humanoid.MaxHealth or 100
-            local healthPercent = (maxHealth > 0) and (health / maxHealth) or 0
+        esp.HealthBar.Text.Text = math.floor(health) .. Settings.HealthTextSuffix
+        esp.HealthBar.Text.Position = Vector2.new(barPos.X + barWidth - 25, barPos.Y + barHeight/2)
 
-            local barHeight = screenSize * 0.8
-            local barWidth = 4
-            local barPos = Vector2.new(
-                boxPosition.X - barWidth - 2,
-                boxPosition.Y + (screenSize - barHeight)/2
-            )
-
-            -- layout updates only when changed
-            if state.lastBoxW ~= boxWidth or state.lastBarH ~= barHeight or
-               state.lastBarPosX ~= barPos.X or state.lastBarPosY ~= barPos.Y then
-
-                hb.Outline.Size = Vector2.new(barWidth, barHeight)
-                hb.Outline.Position = barPos
-
-                state.lastBoxW = boxWidth
-                state.lastBarH = barHeight
-                state.lastBarPosX = barPos.X
-                state.lastBarPosY = barPos.Y
-            end
-
-            -- fill/colour/text only update when health or maxHealth changed
-            if state.lastHealth ~= health or state.lastMaxHealth ~= maxHealth then
-                local fillH = barHeight * healthPercent
-                hb.Fill.Size = Vector2.new(barWidth - 2, fillH)
-                hb.Fill.Position = Vector2.new(barPos.X + 1, barPos.Y + barHeight * (1 - healthPercent))
-
-                local r = math.clamp(255 - (255 * healthPercent), 0, 255)
-                local g = math.clamp(255 * healthPercent, 0, 255)
-                hb.Fill.Color = Color3.fromRGB(r, g, 0)
-
-                local newText = math.floor(health) .. Settings.HealthTextSuffix
-                if state.lastHealthText ~= newText then
-                    hb.Text.Text = newText
-                    state.lastHealthText = newText
-                end
-
-                state.lastHealth = health
-                state.lastMaxHealth = maxHealth
-                state.lastHealthPercent = healthPercent
-            end
-
-            -- position the text each frame (cheap)
-            hb.Text.Position = Vector2.new(barPos.X + barWidth - 20, barPos.Y + barHeight/2)
-
-            -- Visibility toggles only when necessary
-            if Settings.HealthStyle == "Both" then
-                if not state.healthVisible or not hb.Fill.Visible or not hb.Outline.Visible or not hb.Text.Visible then
-                    hb.Fill.Visible = true
-                    hb.Outline.Visible = true
-                    hb.Text.Visible = true
-                    state.healthVisible = true
-                end
-            elseif Settings.HealthStyle == "Text" then
-                if not state.healthVisible or hb.Fill.Visible or hb.Outline.Visible or not hb.Text.Visible then
-                    hb.Fill.Visible = false
-                    hb.Outline.Visible = false
-                    hb.Text.Visible = true
-                    state.healthVisible = true
-                end
-            else -- "Bar"
-                if not state.healthVisible or not hb.Fill.Visible or not hb.Outline.Visible or hb.Text.Visible then
-                    hb.Fill.Visible = true
-                    hb.Outline.Visible = true
-                    hb.Text.Visible = false
-                    state.healthVisible = true
-                end
-            end
+        esp.HealthBar.Fill.Visible = true
+        esp.HealthBar.Outline.Visible = true
+        
+        if Settings.HealthStyle == "Both" then
+            esp.HealthBar.Fill.Visible = true
+            esp.HealthBar.Outline.Visible = true
+            esp.HealthBar.Text.Visible = true
+        elseif Settings.HealthStyle == "Text" then
+            esp.HealthBar.Fill.Visible = false
+            esp.HealthBar.Outline.Visible = false
+            esp.HealthBar.Text.Visible = true
         else
-            if state and state.healthVisible then
-                for _, obj in pairs(hb) do
-                    if obj and obj.Visible ~= nil then
-                        obj.Visible = false
-                    end
-                end
-                state.healthVisible = false
-            end
+            esp.HealthBar.Fill.Visible = true
+            esp.HealthBar.Outline.Visible = true
+            esp.HealthBar.Text.Visible = false
+        end
+    else
+        for _, obj in pairs(esp.HealthBar) do
+            obj.Visible = false
         end
     end
-    -- ===== end HEALTH block =====
 
-    -- ===== optimized NAME block =====
-    do
-        local nameObj = esp.Info.Name
-        if not state then state = EnsureState(player) end
-
-        -- ALWAYS update position (cheap)
-        nameObj.Position = Vector2.new(boxPosition.X + boxWidth/2, boxPosition.Y)
-
-        -- Update color only if changed (cheap compare)
-        if state.lastNameColor ~= color then
-            nameObj.Color = color
-            state.lastNameColor = color
-        end
-
-        -- Visibility toggle only on change
-        if Settings.NameESP then
-            if not state.nameVisible then
-                nameObj.Visible = true
-                state.nameVisible = true
-            end
-        else
-            if state.nameVisible then
-                nameObj.Visible = false
-                state.nameVisible = false
-            end
-        end
-
-        -- Throttled text updates
-        local now = tick()
-        if now - (state.lastNameTick or 0) >= NAME_UPDATE_INTERVAL then
-            state.lastNameTick = now
-            if Settings.NameESP then
-                local nameText = player.DisplayName or player.Name
-                if state.lastName ~= nameText then
-                    nameObj.Text = nameText
-                    state.lastName = nameText
-                end
-            end
-        end
+    esp.Info.Name.Text = player.DisplayName
+    esp.Info.Name.Position = Vector2.new(
+        boxPosition.X + boxWidth/2,
+        boxPosition.Y
+    )
+    esp.Info.Name.Color = color
+    
+    if Settings.NameESP then
+        esp.Info.Name.Visible = true
+    else
+        esp.Info.Name.Visible = false
     end
-    -- ===== end NAME block =====
-
+    
     if Settings.Snaplines then
         esp.Snapline.From = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y)
         esp.Snapline.To = Vector2.new(pos.X, pos.Y)
@@ -851,9 +819,6 @@ local function UpdateESP(player)
             end
         end
     end
-
-    -- We mark overall visible true (so early hides above can check)
-    state.visible = true
 end
 
 local function DisableESP()
@@ -883,7 +848,6 @@ local function CleanupESP()
     end
     Drawings.ESP = {}
     Drawings.Skeleton = {}
-    Drawings.State = {}
 end
 
 local Window = Fluent:CreateWindow({

@@ -145,7 +145,7 @@ local Settings = {
     ShowTeam = false,
     VisibilityCheck = true,
     BoxESP = false,
-    BoxStyle = "Corner",
+    BoxStyle = "ThreeD",
     BoxOutline = true,
     BoxFilled = false,
     BoxFillTransparency = 0.5,
@@ -252,16 +252,6 @@ local function CreateESP(player)
     snapline.Visible = false
     snapline.Color = Colors.Enemy
     snapline.Thickness = 1
-    
-    local highlight = Instance.new("Highlight")
-    highlight.FillColor = Settings.ChamsFillColor
-    highlight.OutlineColor = Settings.ChamsOutlineColor
-    highlight.FillTransparency = Settings.ChamsTransparency
-    highlight.OutlineTransparency = Settings.ChamsOutlineTransparency
-    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    highlight.Enabled = Settings.ChamsEnabled
-    
-    Highlights[player] = highlight
     
     local skeleton = {
         -- Spine & Head
@@ -688,7 +678,7 @@ local function UpdateESP(player)
         
         if Settings.HealthStyle == "Both" or Settings.HealthStyle == "Text" then
             esp.HealthBar.Text.Text = math.floor(health) .. Settings.HealthTextSuffix
-            esp.HealthBar.Text.Position = Vector2.new(barPos.X + barWidth - 20, barPos.Y + barHeight/2)
+            esp.HealthBar.Text.Position = Vector2.new(barPos.X + barWidth - 10, barPos.Y + barHeight/2)
             esp.HealthBar.Text.Visible = true
         else
             esp.HealthBar.Text.Visible = false
@@ -962,7 +952,7 @@ do
     TracerOriginDropdown:OnChanged(function(Value)
         Settings.TracerOrigin = Value
     end)
-
+    
     local HealthSection = Tabs.ESP:AddSection("Health ESP")
     
     local HealthESPToggle = HealthSection:AddToggle("HealthESP", {

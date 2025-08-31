@@ -145,7 +145,7 @@ local Settings = {
     ShowTeam = false,
     VisibilityCheck = true,
     BoxESP = false,
-    BoxStyle = "ThreeD",
+    BoxStyle = "Corner",
     BoxOutline = true,
     BoxFilled = false,
     BoxFillTransparency = 0.5,
@@ -158,7 +158,7 @@ local Settings = {
     HealthStyle = "Bar",
     HealthBarSide = "Left",
     HealthTextSuffix = "HP",
-    NameESP = true,
+    NameESP = false,
     NameMode = "DisplayName",
     ShowDistance = true,
     DistanceUnit = "studs",
@@ -252,6 +252,16 @@ local function CreateESP(player)
     snapline.Visible = false
     snapline.Color = Colors.Enemy
     snapline.Thickness = 1
+    
+    local highlight = Instance.new("Highlight")
+    highlight.FillColor = Settings.ChamsFillColor
+    highlight.OutlineColor = Settings.ChamsOutlineColor
+    highlight.FillTransparency = Settings.ChamsTransparency
+    highlight.OutlineTransparency = Settings.ChamsOutlineTransparency
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.Enabled = Settings.ChamsEnabled
+    
+    Highlights[player] = highlight
     
     local skeleton = {
         -- Spine & Head
@@ -669,32 +679,18 @@ local function UpdateESP(player)
         
         esp.HealthBar.Outline.Size = Vector2.new(barWidth, barHeight)
         esp.HealthBar.Outline.Position = barPos
+        esp.HealthBar.Outline.Visible = true
         
         esp.HealthBar.Fill.Size = Vector2.new(barWidth - 2, barHeight * healthPercent)
         esp.HealthBar.Fill.Position = Vector2.new(barPos.X + 1, barPos.Y + barHeight * (1-healthPercent))
         esp.HealthBar.Fill.Color = Color3.fromRGB(255 - (255 * healthPercent), 255 * healthPercent, 0)
-
-        esp.HealthBar.Text.Text = math.floor(health) .. Settings.HealthTextSuffix
-        esp.HealthBar.Text.Position = Vector2.new(barPos.X + barWidth - 10, barPos.Y + barHeight/2)
-
         esp.HealthBar.Fill.Visible = true
-        esp.HealthBar.Outline.Visible = true
-
-        if Settings.HealthStyle == "Both" then
+        
+        if Settings.HealthStyle == "Both" or Settings.HealthStyle == "Text" then
+            esp.HealthBar.Text.Text = math.floor(health) .. Settings.HealthTextSuffix
+            esp.HealthBar.Text.Position = Vector2.new(barPos.X + barWidth + 2, barPos.Y + barHeight/2)
             esp.HealthBar.Text.Visible = true
-            esp.HealthBar.Outline.Visible = true
-            esp.HealthBar.Fill.Visible = true
-        end
-
-        if Settings.HealthStyle == "Text" then
-            esp.HealthBar.Text.Visible = true
-            esp.HealthBar.Outline.Visible = false
-            esp.HealthBar.Fill.Visible = false
-        end
-
-        if Settings.HealthStyle == "Bar" then
-            esp.HealthBar.Outline.Visible = true
-            esp.HealthBar.Fill.Visible = true
+        else
             esp.HealthBar.Text.Visible = false
         end
     else
@@ -722,6 +718,20 @@ local function UpdateESP(player)
         esp.Snapline.Visible = true
     else
         esp.Snapline.Visible = false
+    end
+    
+    local highlight = Highlights[player]
+    if highlight then
+        if Settings.ChamsEnabled and character then
+            highlight.Parent = character
+            highlight.FillColor = Settings.ChamsFillColor
+            highlight.OutlineColor = Settings.ChamsOutlineColor
+            highlight.FillTransparency = Settings.ChamsTransparency
+            highlight.OutlineTransparency = Settings.ChamsOutlineTransparency
+            highlight.Enabled = true
+        else
+            highlight.Enabled = false
+        end
     end
     
     if Settings.SkeletonESP then
@@ -957,6 +967,79 @@ do
     })
     TracerOriginDropdown:OnChanged(function(Value)
         Settings.TracerOrigin = Value
+    end)
+    
+    local ChamsSection = Tabs.ESP:AddSection("Chams")
+    
+    local ChamsToggle = ChamsSection:AddToggle("ChamsEnabled", {
+        Title = "Enable Chams",
+        Default = false
+    })
+    ChamsToggle:OnChanged(function()
+        Settings.ChamsEnabled = ChamsToggle.Value
+    end)
+    
+    local ChamsFillColor = ChamsSection:AddColorpicker("ChamsFillColor", {
+        Title = "Fill Color",
+        Description = "Color for visible parts",
+        Default = Settings.ChamsFillColor
+    })
+    ChamsFillColor:OnChanged(function(Value)
+        Settings.ChamsFillColor = Value
+    end)
+    
+    local ChamsOccludedColor = ChamsSection:AddColorpicker("ChamsOccludedColor", {
+        Title = "Occluded Color",
+        Description = "Color for parts behind walls",
+        Default = Settings.ChamsOccludedColor
+    })
+    ChamsOccludedColor:OnChanged(function(Value)
+        Settings.ChamsOccludedColor = Value
+    end)
+    
+    local ChamsOutlineColor = ChamsSection:AddColorpicker("ChamsOutlineColor", {
+        Title = "Outline Color",
+        Description = "Color for character outline",
+        Default = Settings.ChamsOutlineColor
+    })
+    ChamsOutlineColor:OnChanged(function(Value)
+        Settings.ChamsOutlineColor = Value
+    end)
+    
+    local ChamsTransparency = ChamsSection:AddSlider("ChamsTransparency", {
+        Title = "Fill Transparency",
+        Description = "Transparency of the fill color",
+        Default = 0.5,
+        Min = 0,
+        Max = 1,
+        Rounding = 2
+    })
+    ChamsTransparency:OnChanged(function(Value)
+        Settings.ChamsTransparency = Value
+    end)
+    
+    local ChamsOutlineTransparency = ChamsSection:AddSlider("ChamsOutlineTransparency", {
+        Title = "Outline Transparency",
+        Description = "Transparency of the outline",
+        Default = 0,
+        Min = 0,
+        Max = 1,
+        Rounding = 2
+    })
+    ChamsOutlineTransparency:OnChanged(function(Value)
+        Settings.ChamsOutlineTransparency = Value
+    end)
+    
+    local ChamsOutlineThickness = ChamsSection:AddSlider("ChamsOutlineThickness", {
+        Title = "Outline Thickness",
+        Description = "Thickness of the outline",
+        Default = 0.1,
+        Min = 0,
+        Max = 1,
+        Rounding = 2
+    })
+    ChamsOutlineThickness:OnChanged(function(Value)
+        Settings.ChamsOutlineThickness = Value
     end)
     
     local HealthSection = Tabs.ESP:AddSection("Health ESP")
